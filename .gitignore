@@ -2,4 +2,4 @@ __pycache__/
 *.py[cod]
 .DS_Store
 run_full*
-sommelier_batch_outputs
+sommelier_batch_outputs*
