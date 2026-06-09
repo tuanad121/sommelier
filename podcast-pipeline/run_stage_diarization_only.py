@@ -35,6 +35,7 @@ from utils.stage_diarization import (
     build_run_dir,
     collect_audio_paths,
     resolve_config_path,
+    resolve_sortformer_postprocessing_yaml,
     write_input_artifacts,
 )
 from utils.tool import check_env, detect_gpu, load_cfg
@@ -295,6 +296,12 @@ def process_audio(
         run_dir = build_run_dir(Path(args.output_root), audio_path)
         trace_writer = TraceRunWriter(run_dir, source_audio_path=audio_path, logger=logger)
         write_input_artifacts(run_dir, audio, diar_chunks)
+        sortformer_postprocessing_yaml_path = resolve_sortformer_postprocessing_yaml(args, run_dir)
+        sortformer_postprocessing_yaml = (
+            str(sortformer_postprocessing_yaml_path) if sortformer_postprocessing_yaml_path else None
+        )
+        if sortformer_postprocessing_yaml:
+            logger.info(f"Using Sortformer postprocessing YAML: {sortformer_postprocessing_yaml}")
 
         logger.info(f"Stage 01 diarization only: {audio_path}")
         dia_start = time.time()
@@ -303,8 +310,10 @@ def process_audio(
             for chunk in diar_chunks:
                 predicted_segments, _ = diar_model.diarize(
                     audio=chunk["path"],
-                    batch_size=1,
+                    batch_size=int(args.sortformer_batch_size),
                     include_tensor_outputs=True,
+                    postprocessing_yaml=sortformer_postprocessing_yaml,
+                    num_workers=int(args.sortformer_num_workers),
                 )
                 chunk_df = sortformer_dia(predicted_segments)
                 if not chunk_df.empty:
@@ -345,6 +354,16 @@ def process_audio(
                 "rt_factor": rt,
                 "speaker_link_threshold": float(args.speaker_link_threshold),
                 "vad_enabled_for_chunking": bool(args.vad),
+                "sortformer_postprocessing_enabled": bool(sortformer_postprocessing_yaml),
+                "sortformer_postprocessing_yaml": sortformer_postprocessing_yaml,
+                "sortformer_pp_onset": float(args.sortformer_pp_onset),
+                "sortformer_pp_offset": float(args.sortformer_pp_offset),
+                "sortformer_pp_pad_onset": float(args.sortformer_pp_pad_onset),
+                "sortformer_pp_pad_offset": float(args.sortformer_pp_pad_offset),
+                "sortformer_pp_min_duration_on": float(args.sortformer_pp_min_duration_on),
+                "sortformer_pp_min_duration_off": float(args.sortformer_pp_min_duration_off),
+                "sortformer_batch_size": int(args.sortformer_batch_size),
+                "sortformer_num_workers": int(args.sortformer_num_workers),
                 "sortformer_pad_onset": float(args.sortformer_pad_onset),
                 "sortformer_pad_offset": float(args.sortformer_pad_offset),
             },
@@ -371,6 +390,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--speaker-link-threshold", type=float, default=0.75, help="Cosine similarity threshold for linking speakers across chunks.")
     parser.add_argument("--diar_device_index", type=int, default=0, help="CUDA device index for VAD and speaker embedding. Use -1 for CPU.")
     parser.add_argument("--sortformer_device_index", type=int, default=0, help="CUDA device index for Sortformer. Use -1 for CPU.")
+    parser.add_argument("--sortformer_batch_size", type=int, default=1, help="Batch size passed to Sortformer diarize(). NVIDIA recommends 1 for best accuracy.")
+    parser.add_argument("--sortformer_num_workers", type=int, default=0, help="DataLoader worker count passed to Sortformer diarize().")
+    parser.add_argument("--sortformer-postprocessing", action=argparse.BooleanOptionalAction, default=False, help="Enable NVIDIA NeMo Sortformer postprocessing YAML.")
+    parser.add_argument("--sortformer-postprocessing-yaml", type=str, default="", help="Optional existing NeMo postprocessing YAML path. Overrides generated values.")
+    parser.add_argument("--sortformer-pp-onset", type=float, default=0.64, help="NeMo postprocessing onset threshold for speech segment start.")
+    parser.add_argument("--sortformer-pp-offset", type=float, default=0.74, help="NeMo postprocessing offset threshold for speech segment end.")
+    parser.add_argument("--sortformer-pp-pad-onset", type=float, default=0.06, help="NeMo postprocessing seconds added before segment start.")
+    parser.add_argument("--sortformer-pp-pad-offset", type=float, default=0.0, help="NeMo postprocessing seconds added after segment end.")
+    parser.add_argument("--sortformer-pp-min-duration-on", type=float, default=0.1, help="NeMo postprocessing minimum speech segment duration.")
+    parser.add_argument("--sortformer-pp-min-duration-off", type=float, default=0.15, help="NeMo postprocessing minimum non-speech duration before keeping a split.")
     parser.add_argument("--sortformer-param", dest="sortformer_param", action=argparse.BooleanOptionalAction, default=False, help="Enable post-hoc boundary padding for Sortformer output.")
     parser.add_argument("--sortformer-pad-offset", type=float, default=-0.24, help="Seconds added to segment end.")
     parser.add_argument("--sortformer-pad-onset", type=float, default=0.0, help="Seconds added to segment start.")

@@ -8,6 +8,14 @@ from utils.trace_artifacts import write_audio_wav
 
 
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".flac", ".m4a", ".aac", ".opus", ".ogg"}
+SORTFORMER_POSTPROCESSING_FIELDS = (
+    ("onset", "sortformer_pp_onset"),
+    ("offset", "sortformer_pp_offset"),
+    ("pad_onset", "sortformer_pp_pad_onset"),
+    ("pad_offset", "sortformer_pp_pad_offset"),
+    ("min_duration_on", "sortformer_pp_min_duration_on"),
+    ("min_duration_off", "sortformer_pp_min_duration_off"),
+)
 
 
 def resolve_config_path(
@@ -75,6 +83,50 @@ def write_input_artifacts(
         out = Path(run_dir) / relative
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def build_sortformer_postprocessing_parameters(args) -> dict[str, float]:
+    return {
+        yaml_key: float(getattr(args, arg_name))
+        for yaml_key, arg_name in SORTFORMER_POSTPROCESSING_FIELDS
+    }
+
+
+def write_sortformer_postprocessing_yaml(path: Path, args) -> Path:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    params = build_sortformer_postprocessing_parameters(args)
+    lines = ["parameters:"]
+    lines.extend(f"  {key}: {value}" for key, value in params.items())
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+def resolve_sortformer_postprocessing_yaml(
+    args,
+    run_dir: Path,
+    cwd: Path | None = None,
+    script_dir: Path | None = None,
+) -> Path | None:
+    requested = str(getattr(args, "sortformer_postprocessing_yaml", "") or "").strip()
+    if requested:
+        cwd = Path.cwd() if cwd is None else Path(cwd)
+        script_dir = Path(__file__).resolve().parents[1] if script_dir is None else Path(script_dir)
+        requested_path = Path(requested)
+        candidates = [requested_path] if requested_path.is_absolute() else [cwd / requested_path, script_dir / requested_path]
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+        searched = ", ".join(str(path) for path in candidates)
+        raise FileNotFoundError(f"sortformer_postprocessing_yaml not found: {requested}. Searched: {searched}")
+
+    if not bool(getattr(args, "sortformer_postprocessing", False)):
+        return None
+
+    return write_sortformer_postprocessing_yaml(
+        Path(run_dir) / "01_diarization" / "sortformer_postprocessing.yaml",
+        args,
+    )
 
 
 def collect_audio_paths(args, cfg: dict[str, Any]) -> list[str]:

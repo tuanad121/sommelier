@@ -74,6 +74,51 @@ class StageDiarizationOnlyTests(unittest.TestCase):
             self.assertEqual(payload["chunks"], chunks)
             self.assertEqual(payload["metadata"]["stage"], "speaker_diarization")
 
+    def test_write_sortformer_postprocessing_yaml_uses_official_nemo_keys(self):
+        from utils.stage_diarization import write_sortformer_postprocessing_yaml
+
+        with tempfile.TemporaryDirectory() as tmp:
+            args = Namespace(
+                sortformer_pp_onset=0.64,
+                sortformer_pp_offset=0.74,
+                sortformer_pp_pad_onset=0.06,
+                sortformer_pp_pad_offset=0.0,
+                sortformer_pp_min_duration_on=0.1,
+                sortformer_pp_min_duration_off=0.15,
+            )
+
+            yaml_path = write_sortformer_postprocessing_yaml(Path(tmp) / "sortformer_pp.yaml", args)
+            text = yaml_path.read_text(encoding="utf-8")
+
+            self.assertIn("parameters:", text)
+            self.assertIn("  onset: 0.64", text)
+            self.assertIn("  offset: 0.74", text)
+            self.assertIn("  pad_onset: 0.06", text)
+            self.assertIn("  pad_offset: 0.0", text)
+            self.assertIn("  min_duration_on: 0.1", text)
+            self.assertIn("  min_duration_off: 0.15", text)
+
+    def test_stage_script_exposes_official_sortformer_postprocessing_flags(self):
+        text = (PIPELINE_DIR / "run_stage_diarization_only.py").read_text(encoding="utf-8")
+
+        for flag in [
+            "--sortformer-postprocessing",
+            "--sortformer-postprocessing-yaml",
+            "--sortformer-pp-onset",
+            "--sortformer-pp-offset",
+            "--sortformer-pp-pad-onset",
+            "--sortformer-pp-pad-offset",
+            "--sortformer-pp-min-duration-on",
+            "--sortformer-pp-min-duration-off",
+            "--sortformer_batch_size",
+            "--sortformer_num_workers",
+        ]:
+            self.assertIn(flag, text)
+
+        self.assertIn("postprocessing_yaml=sortformer_postprocessing_yaml", text)
+        self.assertIn("num_workers=int(args.sortformer_num_workers)", text)
+        self.assertIn("batch_size=int(args.sortformer_batch_size)", text)
+
 
 if __name__ == "__main__":
     unittest.main()
