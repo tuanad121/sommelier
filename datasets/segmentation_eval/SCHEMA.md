@@ -1,0 +1,30 @@
+# Segmentation Eval Schema
+
+- `dataset_version`: version label for reproducibility.
+- `task`: fixed task name for downstream loaders.
+- `video_type`: normalized video bucket.
+- `category_folder`: original folder name under `runs`.
+- `run_id`: run folder name.
+- `source_html`: absolute path to the original `index.html`.
+- `annotation_html`: absolute path to the selected annotated HTML.
+- `full_audio_path`: absolute path to the full audio file for the run.
+- `segment_audio_path`: absolute path to the exported segment audio clip.
+- `segment_index`: zero-based row index in `05_export`.
+- `segment_id`: stable synthetic identifier `run_id:index`.
+- `segment_label`: original segment label from HTML/JSON.
+- `start`, `end`, `duration`: segment timing in seconds.
+- `gap_from_prev`: time gap from the previous segment.
+- `speaker`: predicted speaker label.
+- `language`: language tag from the pipeline.
+- `transcript_pred`: final transcript shown in output.
+- `transcript_whisper`, `transcript_phowhisper`, `transcript_chunkformer`: model alternatives.
+- `correct_script`: manual correction from the note HTML.
+- `note`: manual note from the note HTML.
+- `has_note`, `has_correct_script`, `is_annotated_row`: manual supervision flags.
+- `demucs`, `is_separated`, `sepreformer`: pipeline artifact flags.
+- `asr_quality_source`, `asr_quality_actions`, `asr_context_pad_before`, `asr_context_pad_after`: ASR routing metadata.
+- `is_short_segment`, `is_micro_segment`, `is_long_segment`, `is_backchannel_like`: heuristic timing flags.
+- `segmentation_issue_tags`: heuristic tags tied to segmentation/VAD.
+- `non_segmentation_issue_tags`: heuristic tags that likely belong to ASR/speaker/noise instead.
+- `segmentation_relevance`: `high`, `possible`, or `low`.
+- `primary_eval_target`: `segmentation` for likely segmentation rows, otherwise `context_only`.

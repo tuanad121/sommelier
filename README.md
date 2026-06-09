@@ -126,6 +126,30 @@ python main_original_ASR_MoE.py \
   --merge_gap 2
 ```
 
+### Speaker Diarization Only
+
+Run only the speaker diarization stage when you only need speaker labels and time ranges:
+
+```bash
+python podcast-pipeline/run_stage_diarization_only.py \
+  --input_audio_path /path/to/audio.wav \
+  --output_root sommelier_batch_outputs/diarization_only_runs \
+  --vad \
+  --sortformer-param \
+  --sortformer-pad-offset -0.24
+```
+
+The script performs the minimal required audio preparation internally, runs Sortformer speaker diarization, links speaker labels across long-audio chunks when the embedding model is available, and writes:
+
+```text
+sommelier_batch_outputs/diarization_only_runs/run_full_audio/
+├── 00_input/full.wav
+└── 01_diarization/
+    ├── diarization.json
+    ├── vad_chunks.json
+    └── trace_vad_chunks.json
+```
+
 ## Configuration Options
 
 ### Speaker Diarization
