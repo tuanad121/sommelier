@@ -135,6 +135,15 @@ python podcast-pipeline/run_stage_diarization_only.py \
   --input_audio_path /path/to/audio.wav \
   --output_root sommelier_batch_outputs/diarization_only_runs \
   --vad \
+  --max_dia_chunk_duration 900 \
+  --sortformer_model_name nvidia/diar_streaming_sortformer_4spk-v2.1 \
+  --sortformer-streaming-config \
+  --sortformer_chunk_len 340 \
+  --sortformer_chunk_left_context 1 \
+  --sortformer_chunk_right_context 40 \
+  --sortformer_fifo_len 40 \
+  --sortformer_spkcache_update_period 300 \
+  --sortformer_spkcache_len 188 \
   --sortformer-postprocessing \
   --sortformer-pp-onset 0.64 \
   --sortformer-pp-offset 0.74 \
@@ -144,7 +153,7 @@ python podcast-pipeline/run_stage_diarization_only.py \
   --sortformer-pp-min-duration-off 0.15
 ```
 
-The `--sortformer-pp-*` flags generate a NeMo-compatible Sortformer post-processing YAML and pass it to `diar_model.diarize(..., postprocessing_yaml=...)`. The defaults above match NVIDIA's DIHARD3-dev optimized preset for `nvidia/diar_sortformer_4spk-v1`. You can also pass your own YAML with `--sortformer-postprocessing-yaml /path/to/postprocessing.yaml`.
+The example above uses streaming Sortformer v2.1 and applies its chunk/speaker-cache parameters before inference. The `--sortformer-pp-*` flags generate a NeMo-compatible Sortformer post-processing YAML and pass it to `diar_model.diarize(..., postprocessing_yaml=...)`. The defaults above match NVIDIA's DIHARD3-dev optimized post-processing preset. You can also pass your own YAML with `--sortformer-postprocessing-yaml /path/to/postprocessing.yaml`.
 
 The script performs the minimal required audio preparation internally, runs Sortformer speaker diarization, links speaker labels across long-audio chunks when the embedding model is available, and writes:
 

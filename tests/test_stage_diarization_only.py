@@ -119,6 +119,62 @@ class StageDiarizationOnlyTests(unittest.TestCase):
         self.assertIn("num_workers=int(args.sortformer_num_workers)", text)
         self.assertIn("batch_size=int(args.sortformer_batch_size)", text)
 
+    def test_apply_sortformer_streaming_config_sets_v21_cache_parameters(self):
+        from utils.stage_diarization import apply_sortformer_streaming_config
+
+        class DummyModules:
+            pass
+
+        class DummyModel:
+            def __init__(self):
+                self.sortformer_modules = DummyModules()
+
+        args = Namespace(
+            sortformer_streaming_config=True,
+            sortformer_chunk_len=340,
+            sortformer_chunk_left_context=1,
+            sortformer_chunk_right_context=40,
+            sortformer_fifo_len=40,
+            sortformer_spkcache_update_period=300,
+            sortformer_spkcache_len=188,
+        )
+
+        model = DummyModel()
+        applied = apply_sortformer_streaming_config(model, args)
+
+        self.assertEqual(
+            applied,
+            {
+                "chunk_len": 340,
+                "chunk_left_context": 1,
+                "chunk_right_context": 40,
+                "fifo_len": 40,
+                "spkcache_update_period": 300,
+                "spkcache_len": 188,
+            },
+        )
+        self.assertEqual(model.sortformer_modules.chunk_len, 340)
+        self.assertEqual(model.sortformer_modules.chunk_right_context, 40)
+        self.assertEqual(model.sortformer_modules.spkcache_update_period, 300)
+
+    def test_stage_script_exposes_streaming_sortformer_v21_flags(self):
+        text = (PIPELINE_DIR / "run_stage_diarization_only.py").read_text(encoding="utf-8")
+
+        for flag in [
+            "--sortformer_model_name",
+            "--sortformer-streaming-config",
+            "--sortformer_chunk_len",
+            "--sortformer_chunk_left_context",
+            "--sortformer_chunk_right_context",
+            "--sortformer_fifo_len",
+            "--sortformer_spkcache_update_period",
+            "--sortformer_spkcache_len",
+        ]:
+            self.assertIn(flag, text)
+
+        self.assertIn("SortformerEncLabelModel.from_pretrained(args.sortformer_model_name)", text)
+        self.assertIn("apply_sortformer_streaming_config(diar_model, args, logger=logger)", text)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -32,6 +32,7 @@ from utils.diarization import (
 )
 from utils.logger import Logger
 from utils.stage_diarization import (
+    apply_sortformer_streaming_config,
     build_run_dir,
     collect_audio_paths,
     resolve_config_path,
@@ -354,6 +355,14 @@ def process_audio(
                 "rt_factor": rt,
                 "speaker_link_threshold": float(args.speaker_link_threshold),
                 "vad_enabled_for_chunking": bool(args.vad),
+                "sortformer_model_name": args.sortformer_model_name,
+                "sortformer_streaming_config_enabled": bool(args.sortformer_streaming_config),
+                "sortformer_chunk_len": int(args.sortformer_chunk_len),
+                "sortformer_chunk_left_context": int(args.sortformer_chunk_left_context),
+                "sortformer_chunk_right_context": int(args.sortformer_chunk_right_context),
+                "sortformer_fifo_len": int(args.sortformer_fifo_len),
+                "sortformer_spkcache_update_period": int(args.sortformer_spkcache_update_period),
+                "sortformer_spkcache_len": int(args.sortformer_spkcache_len),
                 "sortformer_postprocessing_enabled": bool(sortformer_postprocessing_yaml),
                 "sortformer_postprocessing_yaml": sortformer_postprocessing_yaml,
                 "sortformer_pp_onset": float(args.sortformer_pp_onset),
@@ -390,8 +399,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--speaker-link-threshold", type=float, default=0.75, help="Cosine similarity threshold for linking speakers across chunks.")
     parser.add_argument("--diar_device_index", type=int, default=0, help="CUDA device index for VAD and speaker embedding. Use -1 for CPU.")
     parser.add_argument("--sortformer_device_index", type=int, default=0, help="CUDA device index for Sortformer. Use -1 for CPU.")
+    parser.add_argument("--sortformer_model_name", type=str, default="nvidia/diar_sortformer_4spk-v1", help="Hugging Face model id for Sortformer.")
     parser.add_argument("--sortformer_batch_size", type=int, default=1, help="Batch size passed to Sortformer diarize(). NVIDIA recommends 1 for best accuracy.")
     parser.add_argument("--sortformer_num_workers", type=int, default=0, help="DataLoader worker count passed to Sortformer diarize().")
+    parser.add_argument("--sortformer-streaming-config", action=argparse.BooleanOptionalAction, default=False, help="Apply streaming Sortformer cache/chunk parameters after model load.")
+    parser.add_argument("--sortformer_chunk_len", type=int, default=340, help="Streaming Sortformer chunk size in 80 ms frames.")
+    parser.add_argument("--sortformer_chunk_left_context", type=int, default=1, help="Streaming Sortformer left context frames.")
+    parser.add_argument("--sortformer_chunk_right_context", type=int, default=40, help="Streaming Sortformer right context frames.")
+    parser.add_argument("--sortformer_fifo_len", type=int, default=40, help="Streaming Sortformer FIFO queue size in frames.")
+    parser.add_argument("--sortformer_spkcache_update_period", type=int, default=300, help="Streaming Sortformer speaker cache update period in frames.")
+    parser.add_argument("--sortformer_spkcache_len", type=int, default=188, help="Streaming Sortformer speaker cache size in frames.")
     parser.add_argument("--sortformer-postprocessing", action=argparse.BooleanOptionalAction, default=False, help="Enable NVIDIA NeMo Sortformer postprocessing YAML.")
     parser.add_argument("--sortformer-postprocessing-yaml", type=str, default="", help="Optional existing NeMo postprocessing YAML path. Overrides generated values.")
     parser.add_argument("--sortformer-pp-onset", type=float, default=0.64, help="NeMo postprocessing onset threshold for speech segment start.")
@@ -440,9 +457,10 @@ def main() -> None:
     except Exception as exc:
         logger.warning(f"Failed to load speaker embedding model; continuing without cross-chunk speaker linking: {exc}")
 
-    diar_model = SortformerEncLabelModel.from_pretrained("nvidia/diar_sortformer_4spk-v1")
+    diar_model = SortformerEncLabelModel.from_pretrained(args.sortformer_model_name)
     diar_model = diar_model.to(sortformer_device)
     diar_model.eval()
+    apply_sortformer_streaming_config(diar_model, args, logger=logger)
     logger.info(f"Sortformer loaded on {sortformer_device}")
 
     audio_paths = collect_audio_paths(args, cfg)

@@ -16,6 +16,14 @@ SORTFORMER_POSTPROCESSING_FIELDS = (
     ("min_duration_on", "sortformer_pp_min_duration_on"),
     ("min_duration_off", "sortformer_pp_min_duration_off"),
 )
+SORTFORMER_STREAMING_FIELDS = (
+    ("chunk_len", "sortformer_chunk_len"),
+    ("chunk_left_context", "sortformer_chunk_left_context"),
+    ("chunk_right_context", "sortformer_chunk_right_context"),
+    ("fifo_len", "sortformer_fifo_len"),
+    ("spkcache_update_period", "sortformer_spkcache_update_period"),
+    ("spkcache_len", "sortformer_spkcache_len"),
+)
 
 
 def resolve_config_path(
@@ -127,6 +135,27 @@ def resolve_sortformer_postprocessing_yaml(
         Path(run_dir) / "01_diarization" / "sortformer_postprocessing.yaml",
         args,
     )
+
+
+def apply_sortformer_streaming_config(diar_model, args, logger=None) -> dict[str, int]:
+    if not bool(getattr(args, "sortformer_streaming_config", False)):
+        return {}
+
+    modules = getattr(diar_model, "sortformer_modules", None)
+    if modules is None:
+        if logger is not None:
+            logger.warning("Sortformer model has no sortformer_modules; streaming config skipped.")
+        return {}
+
+    applied: dict[str, int] = {}
+    for model_attr, arg_name in SORTFORMER_STREAMING_FIELDS:
+        value = int(getattr(args, arg_name))
+        setattr(modules, model_attr, value)
+        applied[model_attr] = value
+
+    if logger is not None:
+        logger.info(f"Applied Sortformer streaming config: {applied}")
+    return applied
 
 
 def collect_audio_paths(args, cfg: dict[str, Any]) -> list[str]:
