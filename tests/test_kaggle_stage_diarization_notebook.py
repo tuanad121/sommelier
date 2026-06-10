@@ -43,12 +43,12 @@ class KaggleStageDiarizationNotebookTests(unittest.TestCase):
         self.assertIn("MAX_DIA_CHUNK_DURATION = 900.0", joined)
         self.assertIn("SORTFORMER_POSTPROCESSING = True", joined)
         self.assertIn("SORTFORMER_POSTPROCESSING_YAML = OUTPUT_ROOT / 'sortformer_postprocessing.yaml'", joined)
-        self.assertIn("SORTFORMER_PP_ONSET = 0.64", joined)
-        self.assertIn("SORTFORMER_PP_OFFSET = 0.74", joined)
-        self.assertIn("SORTFORMER_PP_PAD_ONSET = 0.06", joined)
-        self.assertIn("SORTFORMER_PP_PAD_OFFSET = 0.0", joined)
-        self.assertIn("SORTFORMER_PP_MIN_DURATION_ON = 0.1", joined)
-        self.assertIn("SORTFORMER_PP_MIN_DURATION_OFF = 0.15", joined)
+        self.assertIn("SORTFORMER_PP_ONSET = 0.48", joined)
+        self.assertIn("SORTFORMER_PP_OFFSET = 0.5", joined)
+        self.assertIn("SORTFORMER_PP_PAD_ONSET = 0.015", joined)
+        self.assertIn("SORTFORMER_PP_PAD_OFFSET = 0.015", joined)
+        self.assertIn("SORTFORMER_PP_MIN_DURATION_ON = 0.15", joined)
+        self.assertIn("SORTFORMER_PP_MIN_DURATION_OFF = 0.3", joined)
         self.assertIn("SORTFORMER_BATCH_SIZE = 1", joined)
         self.assertIn("SORTFORMER_NUM_WORKERS = 0", joined)
         self.assertIn("sortformer_pp = {", joined)
@@ -94,6 +94,18 @@ class KaggleStageDiarizationNotebookTests(unittest.TestCase):
                 continue
             source = "".join(cell.get("source", []))
             ast.parse(source, filename=f"07_stage_diarization_only.ipynb:cell{idx}")
+
+    def test_stage_diarization_notebook_builder_tracks_update_source(self):
+        builder = (ROOT / "tools" / "build_kaggle_stage_diarization_notebook.py").read_text(encoding="utf-8")
+
+        self.assertIn('SOURCE_PATH = Path("kaggle_notebooks/notebbook_update.ipynb")', builder)
+        self.assertIn('OUT_PATH = Path("kaggle_notebooks/07_stage_diarization_only.ipynb")', builder)
+        self.assertIn('"SORTFORMER_PP_ONSET": "0.48"', builder)
+        self.assertIn('"SORTFORMER_PP_OFFSET": "0.5"', builder)
+        self.assertIn('"SORTFORMER_PP_PAD_ONSET": "0.015"', builder)
+        self.assertIn('"SORTFORMER_PP_PAD_OFFSET": "0.015"', builder)
+        self.assertIn('"SORTFORMER_PP_MIN_DURATION_ON": "0.15"', builder)
+        self.assertIn('"SORTFORMER_PP_MIN_DURATION_OFF": "0.3"', builder)
 
 
 if __name__ == "__main__":
