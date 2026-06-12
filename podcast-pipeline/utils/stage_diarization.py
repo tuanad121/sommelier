@@ -266,6 +266,229 @@ def _boundary_score(
     )
 
 
+def _adaptive_window_embedding(
+    embedding_fn: Callable[[float, float], Any],
+    start: float,
+    end: float,
+    embedding_window: float,
+) -> np.ndarray | None:
+    duration = float(end) - float(start)
+    if duration <= 0.0:
+        return None
+    min_duration = max(0.05, min(float(embedding_window), duration) * 0.75)
+    return _window_embedding(embedding_fn, float(start), float(end), min_duration=min_duration)
+
+
+def _speaker_margin(
+    embedding: np.ndarray | None,
+    positive_reference: np.ndarray,
+    negative_reference: np.ndarray,
+) -> float | None:
+    if embedding is None:
+        return None
+    return _cosine_similarity(embedding, positive_reference) - _cosine_similarity(embedding, negative_reference)
+
+
+def _nested_short_segment_score(
+    embedding_fn: Callable[[float, float], Any],
+    candidate_start: float,
+    candidate_end: float,
+    original_start: float,
+    original_end: float,
+    container_start: float,
+    container_end: float,
+    short_reference: np.ndarray,
+    container_reference: np.ndarray,
+    embedding_window: float,
+) -> float | None:
+    inside_embedding = _adaptive_window_embedding(
+        embedding_fn,
+        candidate_start,
+        candidate_end,
+        float(embedding_window),
+    )
+    inside_margin = _speaker_margin(inside_embedding, short_reference, container_reference)
+    if inside_margin is None:
+        return None
+
+    context_margins: list[float] = []
+    left_context = _adaptive_window_embedding(
+        embedding_fn,
+        max(container_start, candidate_start - float(embedding_window)),
+        candidate_start,
+        float(embedding_window),
+    )
+    left_margin = _speaker_margin(left_context, container_reference, short_reference)
+    if left_margin is not None:
+        context_margins.append(left_margin)
+
+    right_context = _adaptive_window_embedding(
+        embedding_fn,
+        candidate_end,
+        min(container_end, candidate_end + float(embedding_window)),
+        float(embedding_window),
+    )
+    right_margin = _speaker_margin(right_context, container_reference, short_reference)
+    if right_margin is not None:
+        context_margins.append(right_margin)
+
+    if not context_margins:
+        return None
+
+    original_duration = float(original_end) - float(original_start)
+    candidate_duration = float(candidate_end) - float(candidate_start)
+    shrink_penalty = max(0.0, original_duration - candidate_duration) * 0.05
+    return float(inside_margin) + float(np.mean(context_margins)) - shrink_penalty
+
+
+def _candidate_overlaps_other_segment(
+    df: pd.DataFrame,
+    short_idx: int,
+    container_idx: int,
+    candidate_start: float,
+    candidate_end: float,
+) -> bool:
+    for other_idx, row in df.iterrows():
+        if int(other_idx) in {int(short_idx), int(container_idx)}:
+            continue
+        overlap = min(float(candidate_end), float(row["end"])) - max(float(candidate_start), float(row["start"]))
+        if overlap > 1e-6:
+            return True
+    return False
+
+
+def _refine_nested_short_segments(
+    refined: pd.DataFrame,
+    references: dict[str, np.ndarray],
+    embedding_fn: Callable[[float, float], Any],
+    max_shift: float,
+    step: float,
+    embedding_window: float,
+    min_segment: float,
+    nested_max_segment: float,
+    min_improvement: float,
+) -> tuple[pd.DataFrame, list[dict[str, Any]]]:
+    if float(nested_max_segment) <= 0.0:
+        return refined, []
+
+    adjustments: list[dict[str, Any]] = []
+    refined = refined.copy()
+
+    for short_idx, short in refined.iterrows():
+        short_start = float(short["start"])
+        short_end = float(short["end"])
+        short_duration = short_end - short_start
+        short_speaker = str(short["speaker"])
+        if short_duration <= 0.0 or short_duration > float(nested_max_segment):
+            continue
+        if short_speaker not in references:
+            continue
+
+        best_adjustment: dict[str, Any] | None = None
+        best_score: float | None = None
+        best_start = short_start
+        best_end = short_end
+
+        for container_idx, container in refined.iterrows():
+            if int(container_idx) == int(short_idx):
+                continue
+            container_speaker = str(container["speaker"])
+            if container_speaker == short_speaker or container_speaker not in references:
+                continue
+
+            container_start = float(container["start"])
+            container_end = float(container["end"])
+            if container_start > short_start + 1e-6 or container_end < short_end - 1e-6:
+                continue
+            if container_end - container_start <= short_duration:
+                continue
+
+            original_score = _nested_short_segment_score(
+                embedding_fn,
+                short_start,
+                short_end,
+                short_start,
+                short_end,
+                container_start,
+                container_end,
+                references[short_speaker],
+                references[container_speaker],
+                float(embedding_window),
+            )
+
+            start_lower = max(container_start, short_start - float(max_shift))
+            start_upper = min(short_start + float(max_shift), short_end - float(min_segment))
+            end_lower = max(short_end - float(max_shift), short_start + float(min_segment))
+            end_upper = min(container_end, short_end + float(max_shift))
+            if start_lower > start_upper or end_lower > end_upper:
+                continue
+
+            for candidate_start in _candidate_boundaries(short_start, start_lower, start_upper, float(step)):
+                for candidate_end in _candidate_boundaries(short_end, end_lower, end_upper, float(step)):
+                    if candidate_end - candidate_start < float(min_segment):
+                        continue
+                    if _candidate_overlaps_other_segment(
+                        refined,
+                        short_idx=int(short_idx),
+                        container_idx=int(container_idx),
+                        candidate_start=float(candidate_start),
+                        candidate_end=float(candidate_end),
+                    ):
+                        continue
+
+                    score = _nested_short_segment_score(
+                        embedding_fn,
+                        float(candidate_start),
+                        float(candidate_end),
+                        short_start,
+                        short_end,
+                        container_start,
+                        container_end,
+                        references[short_speaker],
+                        references[container_speaker],
+                        float(embedding_window),
+                    )
+                    if score is None:
+                        continue
+                    if best_score is None or score > best_score:
+                        score_before = float(original_score) if original_score is not None else -1.0
+                        best_score = float(score)
+                        best_start = float(candidate_start)
+                        best_end = float(candidate_end)
+                        best_adjustment = {
+                            "type": "nested_short_segment_trim",
+                            "short_index": int(short_idx),
+                            "container_index": int(container_idx),
+                            "short_speaker": short_speaker,
+                            "container_speaker": container_speaker,
+                            "old_start": round(short_start, 3),
+                            "old_end": round(short_end, 3),
+                            "new_start": round(best_start, 3),
+                            "new_end": round(best_end, 3),
+                            "start_shift_seconds": round(best_start - short_start, 3),
+                            "end_shift_seconds": round(best_end - short_end, 3),
+                            "score_before": round(score_before, 6),
+                            "score_after": round(best_score, 6),
+                            "score_improvement": round(best_score - score_before, 6),
+                        }
+
+        if best_adjustment is None or best_score is None:
+            continue
+        if (
+            abs(best_start - short_start) < max(float(step) / 2.0, 0.001)
+            and abs(best_end - short_end) < max(float(step) / 2.0, 0.001)
+        ):
+            continue
+        if best_adjustment["score_improvement"] < float(min_improvement):
+            continue
+
+        refined.loc[short_idx, "start"] = round(float(best_start), 3)
+        refined.loc[short_idx, "end"] = round(float(best_end), 3)
+        adjustments.append(best_adjustment)
+
+    return refined, adjustments
+
+
 def _candidate_boundaries(
     original_boundary: float,
     lower: float,
@@ -289,6 +512,7 @@ def refine_speaker_boundaries(
     embedding_window: float = 0.4,
     min_segment: float = 0.6,
     reference_min_segment: float | None = None,
+    nested_max_segment: float = 1.0,
     max_gap: float = 0.35,
     min_improvement: float = 0.05,
     logger=None,
@@ -313,7 +537,18 @@ def refine_speaker_boundaries(
             logger.warning("Speaker boundary refinement skipped: not enough speaker references.")
         return refined, []
 
-    adjustments: list[dict[str, Any]] = []
+    refined, adjustments = _refine_nested_short_segments(
+        refined,
+        references=references,
+        embedding_fn=embedding_fn,
+        max_shift=float(max_shift),
+        step=float(step),
+        embedding_window=float(embedding_window),
+        min_segment=float(min_segment),
+        nested_max_segment=float(nested_max_segment),
+        min_improvement=float(min_improvement),
+    )
+
     for idx in range(len(refined) - 1):
         left = refined.loc[idx]
         right = refined.loc[idx + 1]
@@ -382,6 +617,7 @@ def refine_speaker_boundaries(
         refined.loc[idx + 1, "start"] = best_boundary
         adjustments.append(
             {
+                "type": "adjacent_boundary_shift",
                 "left_index": int(idx),
                 "right_index": int(idx + 1),
                 "left_speaker": left_speaker,

@@ -350,6 +350,7 @@ def process_audio(
             "step": float(args.boundary_refine_step),
             "embedding_window": float(args.boundary_refine_embed_window),
             "reference_min_segment": float(args.boundary_refine_reference_min_segment),
+            "nested_max_segment": float(args.boundary_refine_nested_max_segment),
             "min_segment": float(args.boundary_refine_min_segment),
             "max_gap": float(args.boundary_refine_max_gap),
             "min_improvement": float(args.boundary_refine_min_improvement),
@@ -384,6 +385,7 @@ def process_audio(
                     embedding_window=float(args.boundary_refine_embed_window),
                     min_segment=float(args.boundary_refine_min_segment),
                     reference_min_segment=float(args.boundary_refine_reference_min_segment),
+                    nested_max_segment=float(args.boundary_refine_nested_max_segment),
                     max_gap=float(args.boundary_refine_max_gap),
                     min_improvement=float(args.boundary_refine_min_improvement),
                     logger=logger,
@@ -411,6 +413,7 @@ def process_audio(
                 "boundary_refine_step": float(args.boundary_refine_step),
                 "boundary_refine_embed_window": float(args.boundary_refine_embed_window),
                 "boundary_refine_reference_min_segment": float(args.boundary_refine_reference_min_segment),
+                "boundary_refine_nested_max_segment": float(args.boundary_refine_nested_max_segment),
                 "boundary_refine_min_segment": float(args.boundary_refine_min_segment),
                 "boundary_refine_max_gap": float(args.boundary_refine_max_gap),
                 "boundary_refine_min_improvement": float(args.boundary_refine_min_improvement),
@@ -465,6 +468,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--boundary-refine-step", type=float, default=0.05, help="Seconds between candidate boundary positions during refinement.")
     parser.add_argument("--boundary-refine-embed-window", type=float, default=0.4, help="Seconds of audio on each side of a candidate boundary for embedding scoring.")
     parser.add_argument("--boundary-refine-reference-min-segment", type=float, default=2.0, help="Minimum segment duration used when building speaker reference embeddings.")
+    parser.add_argument("--boundary-refine-nested-max-segment", type=float, default=1.0, help="Maximum duration of a nested short segment eligible for boundary trimming.")
     parser.add_argument("--boundary-refine-min-segment", type=float, default=0.3, help="Minimum segment duration preserved after boundary refinement.")
     parser.add_argument("--boundary-refine-max-gap", type=float, default=0.35, help="Only refine adjacent speaker turns whose gap or overlap is within this many seconds.")
     parser.add_argument("--boundary-refine-min-improvement", type=float, default=0.05, help="Minimum embedding-score improvement required to accept a boundary shift.")

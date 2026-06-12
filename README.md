@@ -141,6 +141,7 @@ python podcast-pipeline/run_stage_diarization_only.py \
   --boundary-refine-step 0.05 \
   --boundary-refine-embed-window 0.4 \
   --boundary-refine-reference-min-segment 2.0 \
+  --boundary-refine-nested-max-segment 1.0 \
   --boundary-refine-min-segment 0.3 \
   --boundary-refine-max-gap 0.35 \
   --boundary-refine-min-improvement 0.05 \

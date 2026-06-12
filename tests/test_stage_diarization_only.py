@@ -179,6 +179,54 @@ class StageDiarizationOnlyTests(unittest.TestCase):
         self.assertEqual(adjustments[0]["old_boundary"], 11.2)
         self.assertEqual(adjustments[0]["new_boundary"], 11.0)
 
+    def test_refine_speaker_boundaries_trims_nested_short_segment_without_splitting_container(self):
+        import numpy as np
+        import pandas as pd
+
+        from utils.stage_diarization import refine_speaker_boundaries
+
+        diarization = pd.DataFrame(
+            [
+                {"speaker": "SPEAKER_00", "start": 0.0, "end": 3.0},
+                {"speaker": "SPEAKER_01", "start": 10.0, "end": 20.0},
+                {"speaker": "SPEAKER_00", "start": 12.0, "end": 12.6},
+            ]
+        )
+
+        def fake_embedding(start: float, end: float):
+            if 0.0 <= start and end <= 3.0:
+                return np.array([1.0, 0.0])
+            if 12.0 <= start and end <= 12.4:
+                return np.array([1.0, 0.0])
+            if 10.0 <= start and end <= 20.0 and (end <= 12.0 or start >= 12.4):
+                return np.array([0.0, 1.0])
+            return None
+
+        refined, adjustments = refine_speaker_boundaries(
+            diarization,
+            embedding_fn=fake_embedding,
+            max_shift=0.3,
+            step=0.1,
+            embedding_window=0.2,
+            min_segment=0.3,
+            reference_min_segment=2.0,
+            nested_max_segment=1.0,
+            max_gap=0.5,
+            min_improvement=0.1,
+        )
+
+        container = refined[(refined["speaker"] == "SPEAKER_01")].iloc[0]
+        short = refined[(refined["speaker"] == "SPEAKER_00") & (refined["start"] > 10.0)].iloc[0]
+
+        self.assertEqual(round(float(container["start"]), 3), 10.0)
+        self.assertEqual(round(float(container["end"]), 3), 20.0)
+        self.assertEqual(round(float(short["start"]), 3), 12.0)
+        self.assertEqual(round(float(short["end"]), 3), 12.4)
+        self.assertEqual(len(adjustments), 1)
+        self.assertEqual(adjustments[0]["type"], "nested_short_segment_trim")
+        self.assertEqual(adjustments[0]["short_speaker"], "SPEAKER_00")
+        self.assertEqual(adjustments[0]["container_speaker"], "SPEAKER_01")
+
     def test_stage_script_exposes_official_sortformer_postprocessing_flags(self):
         text = (PIPELINE_DIR / "run_stage_diarization_only.py").read_text(encoding="utf-8")
 
@@ -189,6 +237,7 @@ class StageDiarizationOnlyTests(unittest.TestCase):
             "--boundary-refine-step",
             "--boundary-refine-embed-window",
             "--boundary-refine-reference-min-segment",
+            "--boundary-refine-nested-max-segment",
             "--boundary-refine-min-segment",
             "--boundary-refine-max-gap",
             "--boundary-refine-min-improvement",
@@ -215,6 +264,7 @@ class StageDiarizationOnlyTests(unittest.TestCase):
         self.assertIn('"speaker_boundary_refinement_count": len(boundary_refinements)', text)
         self.assertIn('parser.add_argument("--speaker-boundary-refinement", action=argparse.BooleanOptionalAction, default=False', text)
         self.assertIn('parser.add_argument("--boundary-refine-reference-min-segment", type=float, default=2.0', text)
+        self.assertIn('parser.add_argument("--boundary-refine-nested-max-segment", type=float, default=1.0', text)
         self.assertIn('parser.add_argument("--boundary-refine-min-segment", type=float, default=0.3', text)
         self.assertIn('cfg.setdefault("entrypoint", {})["AUDIO_GAIN_CLAMP_DB"] = float(args.audio_gain_clamp_db)', text)
         self.assertIn('"audio_gain_clamp_db": float(args.audio_gain_clamp_db)', text)
