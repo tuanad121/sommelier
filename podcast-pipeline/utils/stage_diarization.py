@@ -4,6 +4,9 @@ import json
 from pathlib import Path
 from typing import Any, Callable
 
+import numpy as np
+import pandas as pd
+
 from utils.trace_artifacts import write_audio_wav
 
 
@@ -156,6 +159,262 @@ def apply_sortformer_streaming_config(diar_model, args, logger=None) -> dict[str
     if logger is not None:
         logger.info(f"Applied Sortformer streaming config: {applied}")
     return applied
+
+
+def _as_embedding(value: Any) -> np.ndarray | None:
+    if value is None:
+        return None
+    if hasattr(value, "detach"):
+        value = value.detach().cpu().numpy()
+    embedding = np.asarray(value, dtype=np.float32)
+    if embedding.size == 0:
+        return None
+    if embedding.ndim > 1:
+        embedding = embedding.mean(axis=0)
+    norm = float(np.linalg.norm(embedding))
+    if norm == 0.0:
+        return None
+    return embedding / norm
+
+
+def _cosine_similarity(vec_a: np.ndarray | None, vec_b: np.ndarray | None) -> float:
+    if vec_a is None or vec_b is None:
+        return -1.0
+    denom = float(np.linalg.norm(vec_a) * np.linalg.norm(vec_b))
+    if denom == 0.0:
+        return -1.0
+    return float(np.dot(vec_a, vec_b) / denom)
+
+
+def _window_embedding(
+    embedding_fn: Callable[[float, float], Any],
+    start: float,
+    end: float,
+    min_duration: float,
+) -> np.ndarray | None:
+    if end - start < min_duration:
+        return None
+    return _as_embedding(embedding_fn(float(start), float(end)))
+
+
+def _speaker_reference_embeddings(
+    df: pd.DataFrame,
+    embedding_fn: Callable[[float, float], Any],
+    embedding_window: float,
+    min_segment: float,
+) -> dict[str, np.ndarray]:
+    references: dict[str, list[np.ndarray]] = {}
+    min_reference_duration = max(float(embedding_window), float(min_segment))
+
+    for speaker, rows in df.groupby("speaker"):
+        for _, row in rows.sort_values("start").iterrows():
+            start = float(row["start"])
+            end = float(row["end"])
+            duration = end - start
+            if duration < min_reference_duration:
+                continue
+            center = (start + end) / 2.0
+            half_window = min(float(embedding_window), duration) / 2.0
+            embedding = _window_embedding(
+                embedding_fn,
+                center - half_window,
+                center + half_window,
+                min_duration=min(float(embedding_window), duration) * 0.75,
+            )
+            if embedding is not None:
+                references.setdefault(str(speaker), []).append(embedding)
+            if len(references.get(str(speaker), [])) >= 6:
+                break
+
+    return {
+        speaker: _as_embedding(np.mean(embeddings, axis=0))
+        for speaker, embeddings in references.items()
+        if embeddings
+    }
+
+
+def _boundary_score(
+    embedding_fn: Callable[[float, float], Any],
+    boundary: float,
+    left_start: float,
+    right_end: float,
+    left_reference: np.ndarray,
+    right_reference: np.ndarray,
+    embedding_window: float,
+) -> float | None:
+    left_embedding = _window_embedding(
+        embedding_fn,
+        max(left_start, boundary - embedding_window),
+        boundary,
+        min_duration=embedding_window * 0.75,
+    )
+    right_embedding = _window_embedding(
+        embedding_fn,
+        boundary,
+        min(right_end, boundary + embedding_window),
+        min_duration=embedding_window * 0.75,
+    )
+    if left_embedding is None or right_embedding is None:
+        return None
+    return (
+        _cosine_similarity(left_embedding, left_reference)
+        + _cosine_similarity(right_embedding, right_reference)
+        - _cosine_similarity(left_embedding, right_reference)
+        - _cosine_similarity(right_embedding, left_reference)
+    )
+
+
+def _candidate_boundaries(
+    original_boundary: float,
+    lower: float,
+    upper: float,
+    step: float,
+) -> list[float]:
+    step = max(float(step), 0.001)
+    values = {round(float(original_boundary), 3)}
+    current = lower
+    while current <= upper + 1e-9:
+        values.add(round(float(current), 3))
+        current += step
+    return sorted(v for v in values if lower - 1e-9 <= v <= upper + 1e-9)
+
+
+def refine_speaker_boundaries(
+    df: pd.DataFrame,
+    embedding_fn: Callable[[float, float], Any],
+    max_shift: float = 0.4,
+    step: float = 0.05,
+    embedding_window: float = 0.4,
+    min_segment: float = 0.6,
+    max_gap: float = 0.35,
+    min_improvement: float = 0.05,
+    logger=None,
+) -> tuple[pd.DataFrame, list[dict[str, Any]]]:
+    """
+    Move close speaker-change boundaries toward the point that best matches each
+    adjacent speaker's reference embedding.
+    """
+    if df is None or df.empty or len(df) < 2:
+        return df, []
+
+    refined = df.sort_values("start").reset_index(drop=True).copy()
+    references = _speaker_reference_embeddings(
+        refined,
+        embedding_fn=embedding_fn,
+        embedding_window=float(embedding_window),
+        min_segment=float(min_segment),
+    )
+    if len(references) < 2:
+        if logger is not None:
+            logger.warning("Speaker boundary refinement skipped: not enough speaker references.")
+        return refined, []
+
+    adjustments: list[dict[str, Any]] = []
+    for idx in range(len(refined) - 1):
+        left = refined.loc[idx]
+        right = refined.loc[idx + 1]
+        left_speaker = str(left["speaker"])
+        right_speaker = str(right["speaker"])
+        if left_speaker == right_speaker:
+            continue
+        if left_speaker not in references or right_speaker not in references:
+            continue
+
+        left_start = float(left["start"])
+        left_end = float(refined.loc[idx, "end"])
+        right_start = float(refined.loc[idx + 1, "start"])
+        right_end = float(right["end"])
+        if left_end <= left_start or right_end <= right_start:
+            continue
+        gap = right_start - left_end
+        if abs(gap) > float(max_gap):
+            continue
+
+        original_boundary = (left_end + right_start) / 2.0
+        lower = max(original_boundary - float(max_shift), left_start + float(min_segment))
+        upper = min(original_boundary + float(max_shift), right_end - float(min_segment))
+        if lower > upper:
+            continue
+
+        original_score = _boundary_score(
+            embedding_fn,
+            original_boundary,
+            left_start,
+            right_end,
+            references[left_speaker],
+            references[right_speaker],
+            float(embedding_window),
+        )
+        best_boundary = original_boundary
+        best_score = original_score
+
+        for candidate in _candidate_boundaries(original_boundary, lower, upper, float(step)):
+            score = _boundary_score(
+                embedding_fn,
+                candidate,
+                left_start,
+                right_end,
+                references[left_speaker],
+                references[right_speaker],
+                float(embedding_window),
+            )
+            if score is None:
+                continue
+            if best_score is None or score > best_score:
+                best_boundary = candidate
+                best_score = score
+
+        if best_score is None:
+            continue
+        score_before = float(original_score) if original_score is not None else -1.0
+        improvement = float(best_score) - score_before
+        if abs(best_boundary - original_boundary) < max(float(step) / 2.0, 0.001):
+            continue
+        if original_score is not None and improvement < float(min_improvement):
+            continue
+
+        best_boundary = round(float(best_boundary), 3)
+        refined.loc[idx, "end"] = best_boundary
+        refined.loc[idx + 1, "start"] = best_boundary
+        adjustments.append(
+            {
+                "left_index": int(idx),
+                "right_index": int(idx + 1),
+                "left_speaker": left_speaker,
+                "right_speaker": right_speaker,
+                "old_left_end": round(left_end, 3),
+                "old_right_start": round(right_start, 3),
+                "old_boundary": round(original_boundary, 3),
+                "new_boundary": best_boundary,
+                "shift_seconds": round(best_boundary - original_boundary, 3),
+                "score_before": round(score_before, 6),
+                "score_after": round(float(best_score), 6),
+                "score_improvement": round(improvement, 6),
+            }
+        )
+
+    if logger is not None:
+        logger.info(f"Speaker boundary refinement adjusted {len(adjustments)} boundaries.")
+    return refined, adjustments
+
+
+def write_boundary_refinement_report(
+    run_dir: Path,
+    adjustments: list[dict[str, Any]],
+    parameters: dict[str, Any],
+) -> Path:
+    out_path = Path(run_dir) / "01_diarization" / "boundary_refinements.json"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "metadata": {
+            "stage": "speaker_boundary_refinement",
+            "adjustment_count": len(adjustments),
+            "parameters": parameters,
+        },
+        "adjustments": adjustments,
+    }
+    out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return out_path
 
 
 def collect_audio_paths(args, cfg: dict[str, Any]) -> list[str]:

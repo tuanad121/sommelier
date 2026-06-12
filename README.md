@@ -135,6 +135,14 @@ python podcast-pipeline/run_stage_diarization_only.py \
   --input_audio_path /path/to/audio.wav \
   --output_root sommelier_batch_outputs/diarization_only_runs \
   --vad \
+  --audio-gain-clamp-db 6.0 \
+  --speaker-boundary-refinement \
+  --boundary-refine-max-shift 0.4 \
+  --boundary-refine-step 0.05 \
+  --boundary-refine-embed-window 0.4 \
+  --boundary-refine-min-segment 0.6 \
+  --boundary-refine-max-gap 0.35 \
+  --boundary-refine-min-improvement 0.05 \
   --max_dia_chunk_duration 900 \
   --sortformer_model_name nvidia/diar_streaming_sortformer_4spk-v2.1 \
   --sortformer-streaming-config \
@@ -143,17 +151,17 @@ python podcast-pipeline/run_stage_diarization_only.py \
   --sortformer_chunk_right_context 40 \
   --sortformer_fifo_len 40 \
   --sortformer_spkcache_update_period 300 \
-  --sortformer_spkcache_len 188 \
+  --sortformer_spkcache_len 200 \
   --sortformer-postprocessing \
-  --sortformer-pp-onset 0.64 \
-  --sortformer-pp-offset 0.74 \
-  --sortformer-pp-pad-onset 0.06 \
-  --sortformer-pp-pad-offset 0.0 \
-  --sortformer-pp-min-duration-on 0.1 \
-  --sortformer-pp-min-duration-off 0.15
+  --sortformer-pp-onset 0.3 \
+  --sortformer-pp-offset 0.33 \
+  --sortformer-pp-pad-onset 0.015 \
+  --sortformer-pp-pad-offset 0.015 \
+  --sortformer-pp-min-duration-on 0.35 \
+  --sortformer-pp-min-duration-off 0.35
 ```
 
-The example above uses streaming Sortformer v2.1 and applies its chunk/speaker-cache parameters before inference. The `--sortformer-pp-*` flags generate a NeMo-compatible Sortformer post-processing YAML and pass it to `diar_model.diarize(..., postprocessing_yaml=...)`. The defaults above match NVIDIA's DIHARD3-dev optimized post-processing preset. You can also pass your own YAML with `--sortformer-postprocessing-yaml /path/to/postprocessing.yaml`.
+The example above uses streaming Sortformer v2.1 and applies its chunk/speaker-cache parameters before inference. The `--sortformer-pp-*` flags generate a NeMo-compatible Sortformer post-processing YAML and pass it to `diar_model.diarize(..., postprocessing_yaml=...)`. These values match the current Stage 1 diarization tuning. You can also pass your own YAML with `--sortformer-postprocessing-yaml /path/to/postprocessing.yaml`.
 
 The script performs the minimal required audio preparation internally, runs Sortformer speaker diarization, links speaker labels across long-audio chunks when the embedding model is available, and writes:
 

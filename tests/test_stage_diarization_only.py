@@ -98,10 +98,55 @@ class StageDiarizationOnlyTests(unittest.TestCase):
             self.assertIn("  min_duration_on: 0.1", text)
             self.assertIn("  min_duration_off: 0.15", text)
 
+    def test_refine_speaker_boundaries_moves_boundary_toward_speaker_change(self):
+        import numpy as np
+        import pandas as pd
+
+        from utils.stage_diarization import refine_speaker_boundaries
+
+        diarization = pd.DataFrame(
+            [
+                {"speaker": "SPEAKER_00", "start": 0.0, "end": 1.2},
+                {"speaker": "SPEAKER_01", "start": 1.2, "end": 2.2},
+            ]
+        )
+
+        def fake_embedding(start: float, end: float):
+            if end <= 1.0:
+                return np.array([1.0, 0.0])
+            if start >= 1.0:
+                return np.array([0.0, 1.0])
+            return None
+
+        refined, adjustments = refine_speaker_boundaries(
+            diarization,
+            embedding_fn=fake_embedding,
+            max_shift=0.4,
+            step=0.1,
+            embedding_window=0.2,
+            min_segment=0.4,
+            max_gap=0.5,
+            min_improvement=0.1,
+        )
+
+        self.assertEqual(round(float(refined.loc[0, "end"]), 3), 1.0)
+        self.assertEqual(round(float(refined.loc[1, "start"]), 3), 1.0)
+        self.assertEqual(len(adjustments), 1)
+        self.assertEqual(adjustments[0]["left_speaker"], "SPEAKER_00")
+        self.assertEqual(adjustments[0]["right_speaker"], "SPEAKER_01")
+
     def test_stage_script_exposes_official_sortformer_postprocessing_flags(self):
         text = (PIPELINE_DIR / "run_stage_diarization_only.py").read_text(encoding="utf-8")
 
         for flag in [
+            "--audio-gain-clamp-db",
+            "--speaker-boundary-refinement",
+            "--boundary-refine-max-shift",
+            "--boundary-refine-step",
+            "--boundary-refine-embed-window",
+            "--boundary-refine-min-segment",
+            "--boundary-refine-max-gap",
+            "--boundary-refine-min-improvement",
             "--sortformer-postprocessing",
             "--sortformer-postprocessing-yaml",
             "--sortformer-pp-onset",
@@ -118,6 +163,21 @@ class StageDiarizationOnlyTests(unittest.TestCase):
         self.assertIn("postprocessing_yaml=sortformer_postprocessing_yaml", text)
         self.assertIn("num_workers=int(args.sortformer_num_workers)", text)
         self.assertIn("batch_size=int(args.sortformer_batch_size)", text)
+        self.assertIn('parser.add_argument("--audio-gain-clamp-db", type=float, default=6.0', text)
+        self.assertIn("refine_speaker_boundaries(", text)
+        self.assertIn("write_boundary_refinement_report(", text)
+        self.assertIn('"speaker_boundary_refinement_enabled": bool(args.speaker_boundary_refinement)', text)
+        self.assertIn('"speaker_boundary_refinement_count": len(boundary_refinements)', text)
+        self.assertIn('parser.add_argument("--speaker-boundary-refinement", action=argparse.BooleanOptionalAction, default=False', text)
+        self.assertIn('cfg.setdefault("entrypoint", {})["AUDIO_GAIN_CLAMP_DB"] = float(args.audio_gain_clamp_db)', text)
+        self.assertIn('"audio_gain_clamp_db": float(args.audio_gain_clamp_db)', text)
+        self.assertIn('parser.add_argument("--sortformer-postprocessing", action=argparse.BooleanOptionalAction, default=True', text)
+        self.assertIn('parser.add_argument("--sortformer-pp-onset", type=float, default=0.3', text)
+        self.assertIn('parser.add_argument("--sortformer-pp-offset", type=float, default=0.33', text)
+        self.assertIn('parser.add_argument("--sortformer-pp-pad-onset", type=float, default=0.015', text)
+        self.assertIn('parser.add_argument("--sortformer-pp-pad-offset", type=float, default=0.015', text)
+        self.assertIn('parser.add_argument("--sortformer-pp-min-duration-on", type=float, default=0.35', text)
+        self.assertIn('parser.add_argument("--sortformer-pp-min-duration-off", type=float, default=0.35', text)
 
     def test_apply_sortformer_streaming_config_sets_v21_cache_parameters(self):
         from utils.stage_diarization import apply_sortformer_streaming_config
@@ -136,7 +196,7 @@ class StageDiarizationOnlyTests(unittest.TestCase):
             sortformer_chunk_right_context=40,
             sortformer_fifo_len=40,
             sortformer_spkcache_update_period=300,
-            sortformer_spkcache_len=188,
+            sortformer_spkcache_len=200,
         )
 
         model = DummyModel()
@@ -150,7 +210,7 @@ class StageDiarizationOnlyTests(unittest.TestCase):
                 "chunk_right_context": 40,
                 "fifo_len": 40,
                 "spkcache_update_period": 300,
-                "spkcache_len": 188,
+                "spkcache_len": 200,
             },
         )
         self.assertEqual(model.sortformer_modules.chunk_len, 340)
@@ -174,6 +234,10 @@ class StageDiarizationOnlyTests(unittest.TestCase):
 
         self.assertIn("SortformerEncLabelModel.from_pretrained(args.sortformer_model_name)", text)
         self.assertIn("apply_sortformer_streaming_config(diar_model, args, logger=logger)", text)
+        self.assertIn('default="nvidia/diar_streaming_sortformer_4spk-v2.1"', text)
+        self.assertIn('parser.add_argument("--sortformer-streaming-config", action=argparse.BooleanOptionalAction, default=True', text)
+        self.assertIn('parser.add_argument("--sortformer_spkcache_len", type=int, default=200', text)
+        self.assertIn('parser.add_argument("--max_dia_chunk_duration", type=float, default=900.0', text)
 
 
 if __name__ == "__main__":

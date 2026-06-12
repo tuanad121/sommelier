@@ -35,8 +35,10 @@ from utils.stage_diarization import (
     apply_sortformer_streaming_config,
     build_run_dir,
     collect_audio_paths,
+    refine_speaker_boundaries,
     resolve_config_path,
     resolve_sortformer_postprocessing_yaml,
+    write_boundary_refinement_report,
     write_input_artifacts,
 )
 from utils.tool import check_env, detect_gpu, load_cfg
@@ -342,6 +344,54 @@ def process_audio(
         else:
             speakerdia = pd.DataFrame(columns=["segment", "label", "speaker", "start", "end"])
 
+        boundary_refine_parameters = {
+            "enabled": bool(args.speaker_boundary_refinement),
+            "max_shift": float(args.boundary_refine_max_shift),
+            "step": float(args.boundary_refine_step),
+            "embedding_window": float(args.boundary_refine_embed_window),
+            "min_segment": float(args.boundary_refine_min_segment),
+            "max_gap": float(args.boundary_refine_max_gap),
+            "min_improvement": float(args.boundary_refine_min_improvement),
+            "speaker_embedder_loaded": speaker_embedder is not None,
+        }
+        boundary_refinements: list[dict[str, Any]] = []
+        boundary_refinement_report = None
+        if bool(args.speaker_boundary_refinement):
+            if speaker_embedder is None:
+                logger.warning("Speaker boundary refinement enabled but speaker embedder is unavailable; skipping.")
+            else:
+                def boundary_embedding_fn(start: float, end: float):
+                    duration = max(0.0, float(end) - float(start))
+                    min_duration = max(
+                        0.05,
+                        min(float(args.boundary_refine_embed_window) * 0.75, duration),
+                    )
+                    return _extract_speaker_embedding(
+                        audio,
+                        start,
+                        end,
+                        embedder=speaker_embedder,
+                        sample_window=max(duration, 0.05),
+                        min_duration=min_duration,
+                    )
+
+                speakerdia, boundary_refinements = refine_speaker_boundaries(
+                    speakerdia,
+                    embedding_fn=boundary_embedding_fn,
+                    max_shift=float(args.boundary_refine_max_shift),
+                    step=float(args.boundary_refine_step),
+                    embedding_window=float(args.boundary_refine_embed_window),
+                    min_segment=float(args.boundary_refine_min_segment),
+                    max_gap=float(args.boundary_refine_max_gap),
+                    min_improvement=float(args.boundary_refine_min_improvement),
+                    logger=logger,
+                )
+            boundary_refinement_report = write_boundary_refinement_report(
+                run_dir,
+                boundary_refinements,
+                boundary_refine_parameters,
+            )
+
         segment_list = split_long_segments(df_to_list(speakerdia))
         dia_end = time.time()
         rt = (dia_end - dia_start) / audio_duration if audio_duration > 0 else 0.0
@@ -351,6 +401,16 @@ def process_audio(
                 "audio_path": audio_path,
                 "audio_duration_seconds": audio_duration,
                 "sample_rate": audio["sample_rate"],
+                "audio_gain_clamp_db": float(args.audio_gain_clamp_db),
+                "speaker_boundary_refinement_enabled": bool(args.speaker_boundary_refinement),
+                "speaker_boundary_refinement_count": len(boundary_refinements),
+                "speaker_boundary_refinement_report": str(boundary_refinement_report) if boundary_refinement_report else None,
+                "boundary_refine_max_shift": float(args.boundary_refine_max_shift),
+                "boundary_refine_step": float(args.boundary_refine_step),
+                "boundary_refine_embed_window": float(args.boundary_refine_embed_window),
+                "boundary_refine_min_segment": float(args.boundary_refine_min_segment),
+                "boundary_refine_max_gap": float(args.boundary_refine_max_gap),
+                "boundary_refine_min_improvement": float(args.boundary_refine_min_improvement),
                 "processing_time_seconds": dia_end - dia_start,
                 "rt_factor": rt,
                 "speaker_link_threshold": float(args.speaker_link_threshold),
@@ -396,38 +456,48 @@ def parse_args() -> argparse.Namespace:
         help="Directory where diarization-only run folders will be created.",
     )
     parser.add_argument("--vad", action=argparse.BooleanOptionalAction, default=True, help="Use Silero VAD to help pre-diarization chunk splitting.")
+    parser.add_argument("--audio-gain-clamp-db", type=float, default=6.0, help="Maximum absolute gain in dB applied during input audio normalization.")
+    parser.add_argument("--speaker-boundary-refinement", action=argparse.BooleanOptionalAction, default=False, help="Use speaker embeddings to refine close speaker-change boundaries after diarization.")
+    parser.add_argument("--boundary-refine-max-shift", type=float, default=0.4, help="Maximum seconds a speaker boundary may move during refinement.")
+    parser.add_argument("--boundary-refine-step", type=float, default=0.05, help="Seconds between candidate boundary positions during refinement.")
+    parser.add_argument("--boundary-refine-embed-window", type=float, default=0.4, help="Seconds of audio on each side of a candidate boundary for embedding scoring.")
+    parser.add_argument("--boundary-refine-min-segment", type=float, default=0.6, help="Minimum segment duration preserved after boundary refinement.")
+    parser.add_argument("--boundary-refine-max-gap", type=float, default=0.35, help="Only refine adjacent speaker turns whose gap or overlap is within this many seconds.")
+    parser.add_argument("--boundary-refine-min-improvement", type=float, default=0.05, help="Minimum embedding-score improvement required to accept a boundary shift.")
     parser.add_argument("--speaker-link-threshold", type=float, default=0.75, help="Cosine similarity threshold for linking speakers across chunks.")
     parser.add_argument("--diar_device_index", type=int, default=0, help="CUDA device index for VAD and speaker embedding. Use -1 for CPU.")
     parser.add_argument("--sortformer_device_index", type=int, default=0, help="CUDA device index for Sortformer. Use -1 for CPU.")
-    parser.add_argument("--sortformer_model_name", type=str, default="nvidia/diar_sortformer_4spk-v1", help="Hugging Face model id for Sortformer.")
+    parser.add_argument("--sortformer_model_name", type=str, default="nvidia/diar_streaming_sortformer_4spk-v2.1", help="Hugging Face model id for Sortformer.")
     parser.add_argument("--sortformer_batch_size", type=int, default=1, help="Batch size passed to Sortformer diarize(). NVIDIA recommends 1 for best accuracy.")
     parser.add_argument("--sortformer_num_workers", type=int, default=0, help="DataLoader worker count passed to Sortformer diarize().")
-    parser.add_argument("--sortformer-streaming-config", action=argparse.BooleanOptionalAction, default=False, help="Apply streaming Sortformer cache/chunk parameters after model load.")
+    parser.add_argument("--sortformer-streaming-config", action=argparse.BooleanOptionalAction, default=True, help="Apply streaming Sortformer cache/chunk parameters after model load.")
     parser.add_argument("--sortformer_chunk_len", type=int, default=340, help="Streaming Sortformer chunk size in 80 ms frames.")
     parser.add_argument("--sortformer_chunk_left_context", type=int, default=1, help="Streaming Sortformer left context frames.")
     parser.add_argument("--sortformer_chunk_right_context", type=int, default=40, help="Streaming Sortformer right context frames.")
     parser.add_argument("--sortformer_fifo_len", type=int, default=40, help="Streaming Sortformer FIFO queue size in frames.")
     parser.add_argument("--sortformer_spkcache_update_period", type=int, default=300, help="Streaming Sortformer speaker cache update period in frames.")
-    parser.add_argument("--sortformer_spkcache_len", type=int, default=188, help="Streaming Sortformer speaker cache size in frames.")
-    parser.add_argument("--sortformer-postprocessing", action=argparse.BooleanOptionalAction, default=False, help="Enable NVIDIA NeMo Sortformer postprocessing YAML.")
+    parser.add_argument("--sortformer_spkcache_len", type=int, default=200, help="Streaming Sortformer speaker cache size in frames.")
+    parser.add_argument("--sortformer-postprocessing", action=argparse.BooleanOptionalAction, default=True, help="Enable NVIDIA NeMo Sortformer postprocessing YAML.")
     parser.add_argument("--sortformer-postprocessing-yaml", type=str, default="", help="Optional existing NeMo postprocessing YAML path. Overrides generated values.")
-    parser.add_argument("--sortformer-pp-onset", type=float, default=0.64, help="NeMo postprocessing onset threshold for speech segment start.")
-    parser.add_argument("--sortformer-pp-offset", type=float, default=0.74, help="NeMo postprocessing offset threshold for speech segment end.")
-    parser.add_argument("--sortformer-pp-pad-onset", type=float, default=0.06, help="NeMo postprocessing seconds added before segment start.")
-    parser.add_argument("--sortformer-pp-pad-offset", type=float, default=0.0, help="NeMo postprocessing seconds added after segment end.")
-    parser.add_argument("--sortformer-pp-min-duration-on", type=float, default=0.1, help="NeMo postprocessing minimum speech segment duration.")
-    parser.add_argument("--sortformer-pp-min-duration-off", type=float, default=0.15, help="NeMo postprocessing minimum non-speech duration before keeping a split.")
+    parser.add_argument("--sortformer-pp-onset", type=float, default=0.3, help="NeMo postprocessing onset threshold for speech segment start.")
+    parser.add_argument("--sortformer-pp-offset", type=float, default=0.33, help="NeMo postprocessing offset threshold for speech segment end.")
+    parser.add_argument("--sortformer-pp-pad-onset", type=float, default=0.015, help="NeMo postprocessing seconds added before segment start.")
+    parser.add_argument("--sortformer-pp-pad-offset", type=float, default=0.015, help="NeMo postprocessing seconds added after segment end.")
+    parser.add_argument("--sortformer-pp-min-duration-on", type=float, default=0.35, help="NeMo postprocessing minimum speech segment duration.")
+    parser.add_argument("--sortformer-pp-min-duration-off", type=float, default=0.35, help="NeMo postprocessing minimum non-speech duration before keeping a split.")
     parser.add_argument("--sortformer-param", dest="sortformer_param", action=argparse.BooleanOptionalAction, default=False, help="Enable post-hoc boundary padding for Sortformer output.")
     parser.add_argument("--sortformer-pad-offset", type=float, default=-0.24, help="Seconds added to segment end.")
     parser.add_argument("--sortformer-pad-onset", type=float, default=0.0, help="Seconds added to segment start.")
     parser.add_argument("--min_split_silence", type=float, default=1.0, help="Minimum silence duration used by VAD chunk splitting.")
-    parser.add_argument("--max_dia_chunk_duration", type=float, default=300.0, help="Maximum seconds per diarization chunk before splitting.")
+    parser.add_argument("--max_dia_chunk_duration", type=float, default=900.0, help="Maximum seconds per diarization chunk before splitting.")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     cfg = load_cfg(str(resolve_config_path(args.config_path, script_dir=Path(__file__).resolve().parent)))
+    args.audio_gain_clamp_db = abs(float(args.audio_gain_clamp_db))
+    cfg.setdefault("entrypoint", {})["AUDIO_GAIN_CLAMP_DB"] = float(args.audio_gain_clamp_db)
 
     logger = Logger.init_logger("stage_diarization_only")
     set_audio_preprocessing_logger(logger)
