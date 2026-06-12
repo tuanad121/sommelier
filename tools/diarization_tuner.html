@@ -1,0 +1,1650 @@
+<!DOCTYPE html>
+<html lang="vi">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sommelier – Diarization Post-Processing Tuner</title>
+  <meta name="description"
+    content="Interactive tool for tuning Sortformer diarization post-processing parameters with real-time visual feedback.">
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+    rel="stylesheet">
+  <style>
+    :root {
+      --bg-primary: #0b0e14;
+      --bg-secondary: #111820;
+      --bg-card: rgba(22, 30, 42, 0.85);
+      --bg-card-hover: rgba(30, 40, 55, 0.9);
+      --border: rgba(255, 255, 255, 0.06);
+      --border-active: rgba(100, 180, 255, 0.3);
+      --text-primary: #e6edf3;
+      --text-secondary: #8b949e;
+      --text-muted: #555e68;
+      --accent: #58a6ff;
+      --accent-glow: rgba(88, 166, 255, 0.15);
+      --success: #3fb950;
+      --warning: #d29922;
+      --danger: #f85149;
+      --gradient-1: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      --gradient-2: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+      --glass: rgba(255, 255, 255, 0.03);
+      --radius: 12px;
+      --radius-sm: 8px;
+      --shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, sans-serif;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.12);
+      border-radius: 3px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: rgba(255, 255, 255, 0.2);
+    }
+
+    /* ── Header ── */
+    .header {
+      background: var(--bg-secondary);
+      border-bottom: 1px solid var(--border);
+      padding: 16px 28px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      backdrop-filter: blur(12px);
+    }
+
+    .header .logo {
+      font-size: 24px;
+    }
+
+    .header h1 {
+      font-size: 18px;
+      font-weight: 600;
+      background: var(--gradient-1);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .header .subtitle {
+      font-size: 12px;
+      color: var(--text-secondary);
+      margin-left: 4px;
+    }
+
+    /* ── Main layout ── */
+    .main {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    /* ── Cards ── */
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+      backdrop-filter: blur(8px);
+      transition: border-color 0.2s;
+    }
+
+    .card:hover {
+      border-color: var(--border-active);
+    }
+
+    .card-title {
+      font-size: 13px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 1.2px;
+      color: var(--text-secondary);
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .card-title .icon {
+      font-size: 16px;
+    }
+
+    /* ── Upload Zone ── */
+    .upload-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+
+    .upload-zone {
+      border: 2px dashed rgba(255, 255, 255, 0.1);
+      border-radius: var(--radius);
+      padding: 28px 20px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.25s;
+      position: relative;
+    }
+
+    .upload-zone:hover,
+    .upload-zone.dragover {
+      border-color: var(--accent);
+      background: var(--accent-glow);
+    }
+
+    .upload-zone .uz-icon {
+      font-size: 32px;
+      margin-bottom: 8px;
+    }
+
+    .upload-zone .uz-label {
+      font-size: 14px;
+      font-weight: 500;
+    }
+
+    .upload-zone .uz-hint {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+
+    .upload-zone input[type="file"] {
+      display: none;
+    }
+
+    .upload-zone.loaded {
+      border-color: var(--success);
+      border-style: solid;
+    }
+
+    .upload-zone.loaded .uz-icon::after {
+      content: ' ✓';
+      color: var(--success);
+    }
+
+    /* ── Audio Player ── */
+    .player-bar {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 14px 20px;
+      background: rgba(0, 0, 0, 0.3);
+      border-radius: var(--radius-sm);
+    }
+
+    .player-bar .btn-play {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      border: none;
+      background: var(--gradient-1);
+      color: white;
+      font-size: 16px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: transform 0.15s, box-shadow 0.15s;
+      flex-shrink: 0;
+    }
+
+    .player-bar .btn-play:hover {
+      transform: scale(1.1);
+      box-shadow: 0 0 20px rgba(102, 126, 234, 0.4);
+    }
+
+    .player-bar .time-display {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+      color: var(--text-secondary);
+      min-width: 110px;
+      flex-shrink: 0;
+    }
+
+    .player-bar .seek-bar {
+      flex: 1;
+      height: 6px;
+      -webkit-appearance: none;
+      appearance: none;
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 3px;
+      cursor: pointer;
+      outline: none;
+    }
+
+    .player-bar .seek-bar::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--accent);
+      cursor: pointer;
+      box-shadow: 0 0 8px rgba(88, 166, 255, 0.5);
+    }
+
+    .player-bar .speed-select {
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--border);
+      color: var(--text-primary);
+      border-radius: 6px;
+      padding: 4px 8px;
+      font-size: 12px;
+      font-family: 'JetBrains Mono', monospace;
+      cursor: pointer;
+    }
+
+    /* ── Timeline ── */
+    .timeline-container {
+      position: relative;
+    }
+
+    .timeline-label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .timeline-label .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+
+    .timeline-label .dot.original {
+      background: var(--accent);
+    }
+
+    .timeline-label .dot.adjusted {
+      background: #f093fb;
+    }
+
+    .timeline-canvas {
+      width: 100%;
+      height: 56px;
+      border-radius: var(--radius-sm);
+      background: rgba(0, 0, 0, 0.25);
+      cursor: crosshair;
+      display: block;
+    }
+
+    .waveform-canvas {
+      width: 100%;
+      height: 64px;
+      border-radius: var(--radius-sm);
+      background: rgba(0, 0, 0, 0.2);
+      display: block;
+      margin-top: 4px;
+    }
+
+    .timeline-gap {
+      height: 10px;
+    }
+
+    .zoom-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 10px;
+      justify-content: flex-end;
+    }
+
+    .zoom-controls button {
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      border-radius: 6px;
+      padding: 4px 10px;
+      cursor: pointer;
+      font-size: 13px;
+      transition: all 0.15s;
+    }
+
+    .zoom-controls button:hover {
+      background: rgba(255, 255, 255, 0.1);
+      color: var(--text-primary);
+    }
+
+    .zoom-controls .zoom-info {
+      font-size: 11px;
+      color: var(--text-muted);
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .scroll-bar-container {
+      width: 100%;
+      height: 12px;
+      background: rgba(0, 0, 0, 0.3);
+      border-radius: 6px;
+      margin-top: 6px;
+      position: relative;
+      cursor: pointer;
+      display: none;
+    }
+
+    .scroll-bar-thumb {
+      height: 100%;
+      background: rgba(255, 255, 255, 0.15);
+      border-radius: 6px;
+      position: absolute;
+      top: 0;
+      min-width: 20px;
+      cursor: grab;
+    }
+
+    .scroll-bar-thumb:hover {
+      background: rgba(255, 255, 255, 0.25);
+    }
+
+    /* ── Controls ── */
+    .controls-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 18px;
+    }
+
+    .control-group {
+      background: rgba(0, 0, 0, 0.2);
+      border-radius: var(--radius-sm);
+      padding: 14px 16px;
+      border: 1px solid var(--border);
+    }
+
+    .control-label {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+
+    .control-label .name {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-secondary);
+    }
+
+    .control-label .value {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--accent);
+      background: rgba(88, 166, 255, 0.1);
+      padding: 2px 8px;
+      border-radius: 4px;
+    }
+
+    .control-slider {
+      width: 100%;
+      -webkit-appearance: none;
+      appearance: none;
+      height: 5px;
+      border-radius: 3px;
+      background: rgba(255, 255, 255, 0.08);
+      outline: none;
+      cursor: pointer;
+    }
+
+    .control-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: var(--accent);
+      cursor: pointer;
+      box-shadow: 0 0 6px rgba(88, 166, 255, 0.4);
+      transition: transform 0.1s;
+    }
+
+    .control-slider::-webkit-slider-thumb:hover {
+      transform: scale(1.2);
+    }
+
+    .control-hint {
+      font-size: 10px;
+      color: var(--text-muted);
+      margin-top: 6px;
+      line-height: 1.4;
+    }
+
+    .control-note {
+      grid-column: 1 / -1;
+      font-size: 11px;
+      color: var(--text-muted);
+      padding: 10px 14px;
+      background: rgba(210, 153, 34, 0.08);
+      border: 1px solid rgba(210, 153, 34, 0.2);
+      border-radius: var(--radius-sm);
+      line-height: 1.5;
+    }
+
+    .control-note strong {
+      color: var(--warning);
+    }
+
+    .btn-reset {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      border-radius: 6px;
+      padding: 6px 14px;
+      cursor: pointer;
+      font-size: 12px;
+      font-family: 'Inter', sans-serif;
+      transition: all 0.15s;
+    }
+
+    .btn-reset:hover {
+      background: rgba(255, 255, 255, 0.1);
+      color: var(--text-primary);
+    }
+
+    /* ── Stats ── */
+    .stats-row {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 12px;
+    }
+
+    .stat-box {
+      background: rgba(0, 0, 0, 0.2);
+      border-radius: var(--radius-sm);
+      padding: 14px;
+      text-align: center;
+      border: 1px solid var(--border);
+    }
+
+    .stat-box .stat-value {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 22px;
+      font-weight: 700;
+    }
+
+    .stat-box .stat-label {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+
+    .stat-box .stat-diff {
+      font-size: 11px;
+      margin-top: 4px;
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .stat-diff.positive {
+      color: var(--success);
+    }
+
+    .stat-diff.negative {
+      color: var(--danger);
+    }
+
+    .stat-diff.neutral {
+      color: var(--text-muted);
+    }
+
+    /* ── Speaker Legend ── */
+    .speaker-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+
+    .speaker-chip {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 500;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--border);
+      cursor: pointer;
+      transition: all 0.15s;
+      user-select: none;
+    }
+
+    .speaker-chip:hover {
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    .speaker-chip.inactive {
+      opacity: 0.3;
+    }
+
+    .speaker-chip .chip-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    /* ── Segment Table ── */
+    .seg-table-wrap {
+      max-height: 400px;
+      overflow-y: auto;
+      border-radius: var(--radius-sm);
+    }
+
+    table.seg-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    table.seg-table thead {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+    }
+
+    table.seg-table th {
+      background: rgba(0, 0, 0, 0.4);
+      padding: 10px 12px;
+      text-align: left;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--text-muted);
+      border-bottom: 1px solid var(--border);
+    }
+
+    table.seg-table td {
+      padding: 8px 12px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      vertical-align: middle;
+    }
+
+    table.seg-table tr {
+      transition: background 0.1s;
+    }
+
+    table.seg-table tr:hover {
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    table.seg-table tr.removed {
+      opacity: 0.3;
+      text-decoration: line-through;
+    }
+
+    table.seg-table tr.merged td {
+      color: var(--warning);
+    }
+
+    table.seg-table .spk-badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 10px;
+      font-size: 11px;
+      font-weight: 600;
+      color: #fff;
+    }
+
+    table.seg-table .btn-seg-play {
+      background: none;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: var(--text-secondary);
+      border-radius: 50%;
+      width: 28px;
+      height: 28px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      transition: all 0.15s;
+    }
+
+    table.seg-table .btn-seg-play:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+      background: var(--accent-glow);
+    }
+
+    .table-status-col {
+      width: 70px;
+      text-align: center;
+    }
+
+    .status-badge {
+      font-size: 10px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: 'Inter', sans-serif;
+      font-weight: 600;
+    }
+
+    .status-badge.kept {
+      background: rgba(63, 185, 80, 0.15);
+      color: var(--success);
+    }
+
+    .status-badge.removed {
+      background: rgba(248, 81, 73, 0.15);
+      color: var(--danger);
+    }
+
+    .status-badge.merged {
+      background: rgba(210, 153, 34, 0.15);
+      color: var(--warning);
+    }
+
+    .status-badge.padded {
+      background: rgba(88, 166, 255, 0.15);
+      color: var(--accent);
+    }
+
+    /* ── Export ── */
+    .export-block {
+      background: rgba(0, 0, 0, 0.3);
+      border-radius: var(--radius-sm);
+      padding: 16px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+      line-height: 1.8;
+      color: var(--success);
+      position: relative;
+      white-space: pre-wrap;
+      border: 1px solid rgba(63, 185, 80, 0.2);
+    }
+
+    .btn-copy {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      border-radius: 6px;
+      padding: 6px 12px;
+      cursor: pointer;
+      font-size: 11px;
+      font-family: 'Inter', sans-serif;
+      transition: all 0.15s;
+    }
+
+    .btn-copy:hover {
+      background: rgba(255, 255, 255, 0.1);
+      color: var(--text-primary);
+    }
+
+    .btn-copy.copied {
+      background: rgba(63, 185, 80, 0.15);
+      color: var(--success);
+      border-color: var(--success);
+    }
+
+    /* ── Responsive ── */
+    @media (max-width: 768px) {
+      .upload-row {
+        grid-template-columns: 1fr;
+      }
+
+      .controls-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .header h1 {
+        font-size: 15px;
+      }
+    }
+
+    /* ── Tooltip ── */
+    .tooltip {
+      position: fixed;
+      background: rgba(15, 20, 28, 0.95);
+      border: 1px solid var(--border-active);
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 12px;
+      pointer-events: none;
+      z-index: 200;
+      backdrop-filter: blur(8px);
+      box-shadow: var(--shadow);
+      max-width: 280px;
+      display: none;
+    }
+
+    .tooltip .tt-speaker {
+      font-weight: 600;
+      margin-bottom: 2px;
+    }
+
+    .tooltip .tt-time {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: var(--text-secondary);
+    }
+
+    /* ── Animations ── */
+    @keyframes fadeIn {
+      from {
+        opacity: 0;
+        transform: translateY(8px);
+      }
+
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .card {
+      animation: fadeIn 0.4s ease-out;
+    }
+
+    .card:nth-child(2) {
+      animation-delay: 0.05s;
+    }
+
+    .card:nth-child(3) {
+      animation-delay: 0.1s;
+    }
+
+    .card:nth-child(4) {
+      animation-delay: 0.15s;
+    }
+
+    /* ── Empty state ── */
+    .empty-state {
+      text-align: center;
+      padding: 40px 20px;
+      color: var(--text-muted);
+      font-size: 14px;
+    }
+
+    .empty-state .es-icon {
+      font-size: 48px;
+      margin-bottom: 12px;
+    }
+  </style>
+</head>
+
+<body>
+
+  <!-- Header -->
+  <div class="header">
+    <span class="logo">🍷</span>
+    <div>
+      <h1>Sommelier – Diarization Tuner</h1>
+      <span class="subtitle">Interactive Post-Processing Parameter Tuning</span>
+    </div>
+  </div>
+
+  <!-- Tooltip -->
+  <div class="tooltip" id="tooltip">
+    <div class="tt-speaker" id="tt-speaker"></div>
+    <div class="tt-time" id="tt-time"></div>
+  </div>
+
+  <div class="main">
+
+    <!-- Upload -->
+    <div class="card">
+      <div class="card-title"><span class="icon">📂</span> Tải dữ liệu</div>
+      <div class="upload-row">
+        <div class="upload-zone" id="uz-json" tabindex="0">
+          <div class="uz-icon">📋</div>
+          <div class="uz-label">Kéo thả <strong>diarization.json</strong> vào đây</div>
+          <div class="uz-hint">hoặc click để chọn file</div>
+          <input type="file" id="file-json" accept=".json">
+        </div>
+        <div class="upload-zone" id="uz-audio" tabindex="0">
+          <div class="uz-icon">🎵</div>
+          <div class="uz-label">Kéo thả <strong>file audio</strong> vào đây</div>
+          <div class="uz-hint">.wav, .mp3, .m4a, .flac, .ogg</div>
+          <input type="file" id="file-audio" accept=".wav,.mp3,.m4a,.flac,.ogg,.aac,.opus">
+        </div>
+      </div>
+    </div>
+
+    <!-- Audio Player -->
+    <div class="card" id="card-player" style="display:none">
+      <div class="card-title"><span class="icon">🎧</span> Audio Player</div>
+      <div class="player-bar">
+        <button class="btn-play" id="btn-play" title="Play / Pause">▶</button>
+        <span class="time-display" id="time-display">00:00.0 / 00:00.0</span>
+        <input type="range" class="seek-bar" id="seek-bar" min="0" max="1000" value="0" step="1">
+        <select class="speed-select" id="speed-select" title="Playback speed">
+          <option value="0.5">0.5×</option>
+          <option value="0.75">0.75×</option>
+          <option value="1" selected>1×</option>
+          <option value="1.25">1.25×</option>
+          <option value="1.5">1.5×</option>
+          <option value="2">2×</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Timeline -->
+    <div class="card" id="card-timeline" style="display:none">
+      <div class="card-title"><span class="icon">📊</span> Timeline</div>
+      <div id="speaker-legend" class="speaker-legend"></div>
+      <div class="timeline-container">
+        <div class="timeline-label"><span class="dot original"></span> Original</div>
+        <canvas class="timeline-canvas" id="canvas-original" height="56"></canvas>
+        <div class="timeline-gap"></div>
+        <div class="timeline-label"><span class="dot adjusted"></span> Adjusted (sau post-processing)</div>
+        <canvas class="timeline-canvas" id="canvas-adjusted" height="56"></canvas>
+        <canvas class="waveform-canvas" id="canvas-waveform" height="64"></canvas>
+        <div class="scroll-bar-container" id="scroll-container">
+          <div class="scroll-bar-thumb" id="scroll-thumb"></div>
+        </div>
+        <div class="zoom-controls">
+          <span class="zoom-info" id="zoom-info">1.0×</span>
+          <button id="btn-zoom-in" title="Zoom in">🔍+</button>
+          <button id="btn-zoom-out" title="Zoom out">🔍−</button>
+          <button id="btn-zoom-fit" title="Fit all">↔ Fit</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Controls -->
+    <div class="card" id="card-controls" style="display:none">
+      <div class="card-title" style="justify-content: space-between;">
+        <span><span class="icon">🎛️</span> Post-Processing Controls</span>
+        <button class="btn-reset" id="btn-reset-params">↺ Reset mặc định</button>
+      </div>
+      <div class="controls-grid">
+        <div class="control-group">
+          <div class="control-label">
+            <span class="name">pad_onset (đệm trước)</span>
+            <span class="value" id="val-pad-onset">0.015s</span>
+          </div>
+          <input type="range" class="control-slider" id="slider-pad-onset" min="0" max="0.5" step="0.005" value="0.015">
+          <div class="control-hint">Thêm khoảng đệm trước lúc bắt đầu nói. Tăng để bắt đầu sớm hơn.</div>
+        </div>
+        <div class="control-group">
+          <div class="control-label">
+            <span class="name">pad_offset (đệm sau)</span>
+            <span class="value" id="val-pad-offset">0.015s</span>
+          </div>
+          <input type="range" class="control-slider" id="slider-pad-offset" min="0" max="0.5" step="0.005"
+            value="0.015">
+          <div class="control-hint">Thêm khoảng đệm sau lúc kết thúc nói. Tăng để kéo dài đoạn nói.</div>
+        </div>
+        <div class="control-group">
+          <div class="control-label">
+            <span class="name">min_duration_on (thời lượng nói tối thiểu)</span>
+            <span class="value" id="val-min-on">0.150s</span>
+          </div>
+          <input type="range" class="control-slider" id="slider-min-on" min="0" max="2.0" step="0.01" value="0.15">
+          <div class="control-hint">Đoạn nói ngắn hơn ngưỡng này sẽ bị loại bỏ. Tăng để lọc nhiễu ngắn.</div>
+        </div>
+        <div class="control-group">
+          <div class="control-label">
+            <span class="name">min_duration_off (khoảng lặng tối thiểu)</span>
+            <span class="value" id="val-min-off">0.300s</span>
+          </div>
+          <input type="range" class="control-slider" id="slider-min-off" min="0" max="3.0" step="0.01" value="0.3">
+          <div class="control-hint">Khoảng lặng giữa 2 đoạn cùng speaker ngắn hơn ngưỡng này → gộp lại. Tăng để gộp
+            nhiều hơn.</div>
+        </div>
+        <div class="control-note">
+          <strong>⚠ Lưu ý:</strong> Thông số <code>onset</code> và <code>offset</code> (ngưỡng xác suất) chỉ có thể thay
+          đổi khi re-run model trên Kaggle, vì chúng tác động lên output xác suất thô của mạng nơ-ron. Tool này mô phỏng
+          4 thông số còn lại hoạt động trên tập segment đã tạo.
+        </div>
+      </div>
+    </div>
+
+    <!-- Stats -->
+    <div class="card" id="card-stats" style="display:none">
+      <div class="card-title"><span class="icon">📈</span> So sánh Original ↔ Adjusted</div>
+      <div class="stats-row" id="stats-row"></div>
+    </div>
+
+    <!-- Segment Table -->
+    <div class="card" id="card-table" style="display:none">
+      <div class="card-title"><span class="icon">📝</span> Chi tiết Segments</div>
+      <div class="seg-table-wrap" id="seg-table-wrap">
+        <table class="seg-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Start</th>
+              <th>End</th>
+              <th>Duration</th>
+              <th>Speaker</th>
+              <th class="table-status-col">Status</th>
+              <th>▶</th>
+            </tr>
+          </thead>
+          <tbody id="seg-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Export -->
+    <div class="card" id="card-export" style="display:none">
+      <div class="card-title"><span class="icon">📋</span> Copy thông số cho Notebook</div>
+      <div class="export-block" id="export-block">
+        <button class="btn-copy" id="btn-copy">📋 Copy</button>
+      </div>
+    </div>
+
+  </div>
+
+  <audio id="audio-el" preload="auto"></audio>
+
+  <script>
+    // ═══════════════════════════════════════════════════════════
+    // State
+    // ═══════════════════════════════════════════════════════════
+    const S = {
+      originalSegments: [],
+      adjustedSegments: [],
+      audioDuration: 0,
+      waveformData: null,
+      speakers: [],
+      speakerColors: {},
+      activeSpeakers: new Set(),
+      zoom: 1,
+      scrollOffset: 0,
+      isPlaying: false,
+      playingSegIdx: -1,
+      animFrame: null,
+    };
+
+    const COLORS = [
+      '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7',
+      '#DDA0DD', '#F7DC6F', '#BB8FCE', '#85C1E9', '#E8A87C',
+      '#C38D9E', '#41B3A3', '#E27D60', '#659DBD', '#DAAD86',
+    ];
+
+    const DEFAULTS = { padOnset: 0.015, padOffset: 0.015, minOn: 0.15, minOff: 0.3 };
+
+    // Elements
+    const $ = id => document.getElementById(id);
+    const audioEl = $('audio-el');
+
+    // ═══════════════════════════════════════════════════════════
+    // File Loading
+    // ═══════════════════════════════════════════════════════════
+    function setupUploadZone(zoneId, inputId, handler) {
+      const zone = $(zoneId), input = $(inputId);
+      zone.addEventListener('click', () => input.click());
+      input.addEventListener('change', e => { if (e.target.files[0]) handler(e.target.files[0], zone); });
+      zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('dragover'); });
+      zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
+      zone.addEventListener('drop', e => {
+        e.preventDefault(); zone.classList.remove('dragover');
+        if (e.dataTransfer.files[0]) handler(e.dataTransfer.files[0], zone);
+      });
+    }
+
+    function loadJSON(file, zone) {
+      const reader = new FileReader();
+      reader.onload = e => {
+        try {
+          const data = JSON.parse(e.target.result);
+          const segments = data.segments || data;
+          if (!Array.isArray(segments) || segments.length === 0) {
+            alert('File JSON không chứa segments hợp lệ.'); return;
+          }
+          // Store metadata
+          S.metadata = data.metadata || {};
+          S.originalSegments = segments.map((seg, i) => ({
+            index: seg.index ?? i,
+            start: parseFloat(seg.start),
+            end: parseFloat(seg.end),
+            speaker: seg.speaker || `SPK_${i}`,
+          }));
+          // Determine audio duration from metadata or segments
+          S.audioDuration = S.metadata.audio_duration_seconds ||
+            Math.max(...S.originalSegments.map(s => s.end)) + 1;
+          // Extract speakers
+          S.speakers = [...new Set(S.originalSegments.map(s => s.speaker))].sort();
+          S.speakers.forEach((spk, i) => { S.speakerColors[spk] = COLORS[i % COLORS.length]; });
+          S.activeSpeakers = new Set(S.speakers);
+
+          zone.classList.add('loaded');
+          zone.querySelector('.uz-label').textContent = `✓ ${file.name} (${S.originalSegments.length} segments)`;
+          showUI();
+          applyPostProcessing();
+        } catch (err) { alert('Lỗi đọc JSON: ' + err.message); }
+      };
+      reader.readAsText(file);
+    }
+
+    function loadAudio(file, zone) {
+      const url = URL.createObjectURL(file);
+      audioEl.src = url;
+      audioEl.addEventListener('loadedmetadata', () => {
+        S.audioDuration = audioEl.duration;
+        zone.classList.add('loaded');
+        zone.querySelector('.uz-label').textContent = `✓ ${file.name} (${fmtTime(audioEl.duration)})`;
+        $('card-player').style.display = '';
+        computeWaveform(file);
+        renderAll();
+      }, { once: true });
+    }
+
+    async function computeWaveform(file) {
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const buf = await file.arrayBuffer();
+        const audioBuffer = await ctx.decodeAudioData(buf);
+        const raw = audioBuffer.getChannelData(0);
+        const buckets = 2000;
+        const bucketSize = Math.floor(raw.length / buckets);
+        const data = new Float32Array(buckets);
+        for (let i = 0; i < buckets; i++) {
+          let sum = 0;
+          const start = i * bucketSize;
+          for (let j = start; j < start + bucketSize && j < raw.length; j++) {
+            sum += raw[j] * raw[j];
+          }
+          data[i] = Math.sqrt(sum / bucketSize);
+        }
+        S.waveformData = data;
+        renderAll();
+        ctx.close();
+      } catch (e) { console.warn('Waveform computation failed:', e); }
+    }
+
+    setupUploadZone('uz-json', 'file-json', loadJSON);
+    setupUploadZone('uz-audio', 'file-audio', loadAudio);
+
+    // ═══════════════════════════════════════════════════════════
+    // Post-Processing Simulation
+    // ═══════════════════════════════════════════════════════════
+    function getParams() {
+      return {
+        padOnset: parseFloat($('slider-pad-onset').value),
+        padOffset: parseFloat($('slider-pad-offset').value),
+        minOn: parseFloat($('slider-min-on').value),
+        minOff: parseFloat($('slider-min-off').value),
+      };
+    }
+
+    function applyPostProcessing() {
+      const p = getParams();
+      let segs = S.originalSegments.map(s => ({ ...s, _status: 'kept' }));
+
+      // 1. Apply padding
+      segs.forEach(seg => {
+        const origStart = seg.start, origEnd = seg.end;
+        seg.start = Math.max(0, seg.start - p.padOnset);
+        seg.end = Math.min(S.audioDuration, seg.end + p.padOffset);
+        if (seg.start !== origStart || seg.end !== origEnd) {
+          seg._status = 'padded';
+        }
+      });
+
+      // 2. Remove short segments
+      segs.forEach(seg => {
+        if ((seg.end - seg.start) < p.minOn) { seg._status = 'removed'; }
+      });
+      const removed = segs.filter(s => s._status === 'removed');
+      segs = segs.filter(s => s._status !== 'removed');
+
+      // 3. Sort by start time
+      segs.sort((a, b) => a.start - b.start);
+
+      // 4. Merge same-speaker segments with small silence gaps
+      const merged = [];
+      for (const seg of segs) {
+        if (merged.length > 0) {
+          const last = merged[merged.length - 1];
+          if (last.speaker === seg.speaker && (seg.start - last.end) < p.minOff) {
+            last.end = Math.max(last.end, seg.end);
+            last._status = 'merged';
+            last._mergedCount = (last._mergedCount || 1) + 1;
+            continue;
+          }
+        }
+        merged.push({ ...seg, _mergedCount: seg._mergedCount || 0 });
+      }
+
+      // Build status map for original segments
+      S.segmentStatusMap = {};
+      S.originalSegments.forEach(seg => {
+        S.segmentStatusMap[seg.index] = 'kept';
+      });
+      removed.forEach(seg => { S.segmentStatusMap[seg.index] = 'removed'; });
+      merged.forEach(seg => {
+        if (seg._status === 'merged') S.segmentStatusMap[seg.index] = 'merged';
+        if (seg._status === 'padded') S.segmentStatusMap[seg.index] = 'padded';
+      });
+
+      S.adjustedSegments = merged;
+      renderAll();
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // Canvas Rendering
+    // ═══════════════════════════════════════════════════════════
+    function getVisibleRange() {
+      const totalDur = S.audioDuration || 1;
+      const visibleDur = totalDur / S.zoom;
+      const start = S.scrollOffset * (totalDur - visibleDur);
+      return { start, end: start + visibleDur, visibleDur };
+    }
+
+    function renderTimeline(canvasId, segments, isAdjusted) {
+      const canvas = $(canvasId);
+      const ctx = canvas.getContext('2d');
+      const dpr = window.devicePixelRatio || 1;
+      const rect = canvas.getBoundingClientRect();
+      canvas.width = rect.width * dpr;
+      canvas.height = rect.height * dpr;
+      ctx.scale(dpr, dpr);
+      const W = rect.width, H = rect.height;
+
+      ctx.clearRect(0, 0, W, H);
+
+      if (!segments.length || !S.audioDuration) return;
+
+      const { start: visStart, end: visEnd, visibleDur } = getVisibleRange();
+      const pxPerSec = W / visibleDur;
+
+      // Draw segments
+      for (const seg of segments) {
+        if (!S.activeSpeakers.has(seg.speaker)) continue;
+        if (seg.end < visStart || seg.start > visEnd) continue;
+        const x = (seg.start - visStart) * pxPerSec;
+        const w = (seg.end - seg.start) * pxPerSec;
+        const color = S.speakerColors[seg.speaker] || '#888';
+
+        ctx.fillStyle = color + (isAdjusted ? 'cc' : '99');
+        ctx.beginPath();
+        const r = Math.min(4, w / 2);
+        ctx.roundRect(Math.max(0, x), 4, Math.max(1, w), H - 8, r);
+        ctx.fill();
+
+        // Label if wide enough
+        if (w > 40) {
+          ctx.fillStyle = '#000';
+          ctx.font = `600 ${Math.min(11, H * 0.22)}px Inter`;
+          ctx.textBaseline = 'middle';
+          const label = seg.speaker.replace('SPEAKER_', 'S');
+          ctx.fillText(label, Math.max(4, x + 4), H / 2);
+        }
+      }
+
+      // Draw playhead
+      if (audioEl.src && !audioEl.paused) {
+        const px = (audioEl.currentTime - visStart) * pxPerSec;
+        if (px >= 0 && px <= W) {
+          ctx.strokeStyle = '#fff';
+          ctx.lineWidth = 1.5;
+          ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, H); ctx.stroke();
+        }
+      }
+
+      // Time ruler
+      ctx.fillStyle = 'rgba(255,255,255,0.15)';
+      ctx.font = '10px JetBrains Mono';
+      ctx.textBaseline = 'bottom';
+      const step = getTimeStep(visibleDur, W);
+      let t = Math.ceil(visStart / step) * step;
+      while (t < visEnd) {
+        const px = (t - visStart) * pxPerSec;
+        ctx.fillRect(px, H - 2, 1, 2);
+        ctx.fillText(fmtTimeSec(t), px + 2, H - 3);
+        t += step;
+      }
+    }
+
+    function renderWaveform() {
+      const canvas = $('canvas-waveform');
+      const ctx = canvas.getContext('2d');
+      const dpr = window.devicePixelRatio || 1;
+      const rect = canvas.getBoundingClientRect();
+      canvas.width = rect.width * dpr;
+      canvas.height = rect.height * dpr;
+      ctx.scale(dpr, dpr);
+      const W = rect.width, H = rect.height;
+      ctx.clearRect(0, 0, W, H);
+
+      if (!S.waveformData) {
+        ctx.fillStyle = 'rgba(255,255,255,0.05)';
+        ctx.font = '12px Inter';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('Upload audio để xem waveform', W / 2, H / 2);
+        return;
+      }
+
+      const { start: visStart, end: visEnd, visibleDur } = getVisibleRange();
+      const totalDur = S.audioDuration;
+      const data = S.waveformData;
+      const startIdx = Math.floor((visStart / totalDur) * data.length);
+      const endIdx = Math.ceil((visEnd / totalDur) * data.length);
+
+      const grad = ctx.createLinearGradient(0, 0, 0, H);
+      grad.addColorStop(0, 'rgba(88,166,255,0.5)');
+      grad.addColorStop(0.5, 'rgba(88,166,255,0.2)');
+      grad.addColorStop(1, 'rgba(88,166,255,0.5)');
+      ctx.fillStyle = grad;
+
+      const midY = H / 2;
+      const maxVal = Math.max(...data) || 1;
+
+      for (let i = startIdx; i < endIdx && i < data.length; i++) {
+        const x = ((i - startIdx) / (endIdx - startIdx)) * W;
+        const amp = (data[i] / maxVal) * (H * 0.45);
+        ctx.fillRect(x, midY - amp, Math.max(1, W / (endIdx - startIdx)), amp * 2);
+      }
+
+      // Playhead
+      if (audioEl.src) {
+        const px = ((audioEl.currentTime - visStart) / visibleDur) * W;
+        if (px >= 0 && px <= W) {
+          ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+          ctx.lineWidth = 1;
+          ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, H); ctx.stroke();
+        }
+      }
+    }
+
+    function renderAll() {
+      renderTimeline('canvas-original', S.originalSegments, false);
+      renderTimeline('canvas-adjusted', S.adjustedSegments, true);
+      renderWaveform();
+      renderStats();
+      renderSegmentTable();
+      renderExport();
+      updateScrollBar();
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // Stats
+    // ═══════════════════════════════════════════════════════════
+    function renderStats() {
+      const orig = S.originalSegments.filter(s => S.activeSpeakers.has(s.speaker));
+      const adj = S.adjustedSegments.filter(s => S.activeSpeakers.has(s.speaker));
+
+      const origCount = orig.length;
+      const adjCount = adj.length;
+      const origDur = orig.reduce((s, seg) => s + seg.end - seg.start, 0);
+      const adjDur = adj.reduce((s, seg) => s + seg.end - seg.start, 0);
+      const origAvg = origCount ? origDur / origCount : 0;
+      const adjAvg = adjCount ? adjDur / adjCount : 0;
+      const removedCount = S.originalSegments.filter(s => S.segmentStatusMap[s.index] === 'removed').length;
+      const mergedCount = S.adjustedSegments.filter(s => s._status === 'merged').length;
+
+      const stats = [
+        { label: 'Segments', orig: origCount, adj: adjCount, fmt: v => v },
+        { label: 'Tổng thời gian nói', orig: origDur, adj: adjDur, fmt: v => v.toFixed(1) + 's' },
+        { label: 'Trung bình / segment', orig: origAvg, adj: adjAvg, fmt: v => v.toFixed(2) + 's' },
+        { label: 'Bị loại (quá ngắn)', orig: 0, adj: removedCount, fmt: v => v, noDiff: true },
+        { label: 'Đã gộp', orig: 0, adj: mergedCount, fmt: v => v, noDiff: true },
+      ];
+
+      $('stats-row').innerHTML = stats.map(s => {
+        const diff = s.adj - s.orig;
+        let diffStr = '', diffClass = 'neutral';
+        if (!s.noDiff && diff !== 0) {
+          diffStr = (diff > 0 ? '+' : '') + (typeof s.orig === 'number' && s.label.includes('thời gian') ? diff.toFixed(1) + 's' : diff);
+          diffClass = diff > 0 ? 'positive' : 'negative';
+        }
+        return `<div class="stat-box">
+      <div class="stat-value">${s.noDiff ? s.fmt(s.adj) : s.fmt(s.adj)}</div>
+      <div class="stat-label">${s.label}</div>
+      ${diffStr ? `<div class="stat-diff ${diffClass}">${diffStr}</div>` : ''}
+    </div>`;
+      }).join('');
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // Segment Table
+    // ═══════════════════════════════════════════════════════════
+    function renderSegmentTable() {
+      const tbody = $('seg-tbody');
+      const rows = S.originalSegments.map(seg => {
+        const status = S.segmentStatusMap[seg.index] || 'kept';
+        const color = S.speakerColors[seg.speaker] || '#888';
+        const dur = (seg.end - seg.start).toFixed(3);
+        const isActive = S.activeSpeakers.has(seg.speaker);
+        const statusBadge = {
+          kept: '<span class="status-badge kept">Giữ</span>',
+          removed: '<span class="status-badge removed">Loại</span>',
+          merged: '<span class="status-badge merged">Gộp</span>',
+          padded: '<span class="status-badge padded">Đệm</span>',
+        }[status] || '';
+
+        return `<tr class="${status === 'removed' ? 'removed' : ''} ${status === 'merged' ? 'merged' : ''}" style="${isActive ? '' : 'display:none'}">
+      <td>${seg.index}</td>
+      <td>${seg.start.toFixed(3)}</td>
+      <td>${seg.end.toFixed(3)}</td>
+      <td>${dur}</td>
+      <td><span class="spk-badge" style="background:${color}">${seg.speaker}</span></td>
+      <td class="table-status-col">${statusBadge}</td>
+      <td><button class="btn-seg-play" data-start="${seg.start}" data-end="${seg.end}" title="Nghe đoạn này">▶</button></td>
+    </tr>`;
+      });
+      tbody.innerHTML = rows.join('');
+
+      // Play buttons
+      tbody.querySelectorAll('.btn-seg-play').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const start = parseFloat(btn.dataset.start);
+          const end = parseFloat(btn.dataset.end);
+          playRange(start, end);
+        });
+      });
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // Export
+    // ═══════════════════════════════════════════════════════════
+    function renderExport() {
+      const p = getParams();
+      const code = `SORTFORMER_PP_PAD_ONSET = ${p.padOnset}
+SORTFORMER_PP_PAD_OFFSET = ${p.padOffset}
+SORTFORMER_PP_MIN_DURATION_ON = ${p.minOn}
+SORTFORMER_PP_MIN_DURATION_OFF = ${p.minOff}`;
+      const block = $('export-block');
+      const copyBtn = block.querySelector('.btn-copy');
+      block.firstChild && block.firstChild.nodeType === 3 && block.removeChild(block.firstChild);
+      // Set text before the button
+      const textNode = document.createTextNode(code);
+      if (block.firstChild === copyBtn) {
+        block.insertBefore(textNode, copyBtn);
+      } else {
+        // Remove old text nodes
+        Array.from(block.childNodes).forEach(n => { if (n !== copyBtn) block.removeChild(n); });
+        block.insertBefore(textNode, copyBtn);
+      }
+    }
+
+    $('btn-copy').addEventListener('click', () => {
+      const p = getParams();
+      const code = `SORTFORMER_PP_PAD_ONSET = ${p.padOnset}\nSORTFORMER_PP_PAD_OFFSET = ${p.padOffset}\nSORTFORMER_PP_MIN_DURATION_ON = ${p.minOn}\nSORTFORMER_PP_MIN_DURATION_OFF = ${p.minOff}`;
+      navigator.clipboard.writeText(code).then(() => {
+        const btn = $('btn-copy');
+        btn.textContent = '✓ Copied!';
+        btn.classList.add('copied');
+        setTimeout(() => { btn.textContent = '📋 Copy'; btn.classList.remove('copied'); }, 2000);
+      });
+    });
+
+    // ═══════════════════════════════════════════════════════════
+    // Speaker Legend
+    // ═══════════════════════════════════════════════════════════
+    function renderSpeakerLegend() {
+      const container = $('speaker-legend');
+      container.innerHTML = S.speakers.map(spk => {
+        const color = S.speakerColors[spk];
+        const count = S.originalSegments.filter(s => s.speaker === spk).length;
+        const active = S.activeSpeakers.has(spk);
+        return `<div class="speaker-chip ${active ? '' : 'inactive'}" data-speaker="${spk}">
+      <span class="chip-dot" style="background:${color}"></span>
+      ${spk} (${count})
+    </div>`;
+      }).join('');
+
+      container.querySelectorAll('.speaker-chip').forEach(chip => {
+        chip.addEventListener('click', () => {
+          const spk = chip.dataset.speaker;
+          if (S.activeSpeakers.has(spk)) { S.activeSpeakers.delete(spk); }
+          else { S.activeSpeakers.add(spk); }
+          chip.classList.toggle('inactive');
+          renderAll();
+        });
+      });
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // Audio Playback
+    // ═══════════════════════════════════════════════════════════
+    $('btn-play').addEventListener('click', () => {
+      if (!audioEl.src) return;
+      if (audioEl.paused) { audioEl.play(); startPlayheadLoop(); }
+      else { audioEl.pause(); }
+    });
+
+    audioEl.addEventListener('play', () => { $('btn-play').textContent = '⏸'; S.isPlaying = true; });
+    audioEl.addEventListener('pause', () => { $('btn-play').textContent = '▶'; S.isPlaying = false; });
+
+    $('seek-bar').addEventListener('input', e => {
+      if (!audioEl.src) return;
+      audioEl.currentTime = (e.target.value / 1000) * S.audioDuration;
+    });
+
+    $('speed-select').addEventListener('change', e => {
+      audioEl.playbackRate = parseFloat(e.target.value);
+    });
+
+    function startPlayheadLoop() {
+      function tick() {
+        if (audioEl.paused) return;
+        updateTimeDisplay();
+        renderTimeline('canvas-original', S.originalSegments, false);
+        renderTimeline('canvas-adjusted', S.adjustedSegments, true);
+        renderWaveform();
+        S.animFrame = requestAnimationFrame(tick);
+      }
+      tick();
+    }
+
+    function updateTimeDisplay() {
+      const cur = audioEl.currentTime || 0;
+      const dur = S.audioDuration || 0;
+      $('time-display').textContent = `${fmtTime(cur)} / ${fmtTime(dur)}`;
+      $('seek-bar').value = dur ? (cur / dur) * 1000 : 0;
+    }
+
+    function playRange(start, end) {
+      if (!audioEl.src) return;
+      audioEl.currentTime = start;
+      audioEl.play();
+      startPlayheadLoop();
+      const handler = () => {
+        if (audioEl.currentTime >= end) { audioEl.pause(); audioEl.removeEventListener('timeupdate', handler); }
+      };
+      audioEl.addEventListener('timeupdate', handler);
+    }
+
+    // Click on timeline to seek
+    ['canvas-original', 'canvas-adjusted', 'canvas-waveform'].forEach(id => {
+      $(id).addEventListener('click', e => {
+        if (!audioEl.src) return;
+        const rect = e.target.getBoundingClientRect();
+        const frac = (e.clientX - rect.left) / rect.width;
+        const { start, visibleDur } = getVisibleRange();
+        audioEl.currentTime = start + frac * visibleDur;
+        updateTimeDisplay();
+        renderAll();
+      });
+    });
+
+    // ═══════════════════════════════════════════════════════════
+    // Tooltip
+    // ═══════════════════════════════════════════════════════════
+    ['canvas-original', 'canvas-adjusted'].forEach(id => {
+      const canvas = $(id);
+      const segs = id.includes('original') ? () => S.originalSegments : () => S.adjustedSegments;
+
+      canvas.addEventListener('mousemove', e => {
+        const rect = canvas.getBoundingClientRect();
+        const frac = (e.clientX - rect.left) / rect.width;
+        const { start, visibleDur } = getVisibleRange();
+        const t = start + frac * visibleDur;
+
+        const seg = segs().find(s => S.activeSpeakers.has(s.speaker) && t >= s.start && t <= s.end);
+        const tt = $('tooltip');
+        if (seg) {
+          $('tt-speaker').textContent = seg.speaker;
+          $('tt-speaker').style.color = S.speakerColors[seg.speaker];
+          $('tt-time').textContent = `${seg.start.toFixed(3)}s → ${seg.end.toFixed(3)}s (${(seg.end - seg.start).toFixed(3)}s)`;
+          tt.style.display = 'block';
+          tt.style.left = (e.clientX + 12) + 'px';
+          tt.style.top = (e.clientY - 40) + 'px';
+        } else { tt.style.display = 'none'; }
+      });
+      canvas.addEventListener('mouseleave', () => { $('tooltip').style.display = 'none'; });
+    });
+
+    // ═══════════════════════════════════════════════════════════
+    // Zoom & Scroll
+    // ═══════════════════════════════════════════════════════════
+    $('btn-zoom-in').addEventListener('click', () => { setZoom(S.zoom * 1.5); });
+    $('btn-zoom-out').addEventListener('click', () => { setZoom(S.zoom / 1.5); });
+    $('btn-zoom-fit').addEventListener('click', () => { setZoom(1); S.scrollOffset = 0; renderAll(); });
+
+    function setZoom(z) {
+      S.zoom = Math.max(1, Math.min(100, z));
+      $('zoom-info').textContent = S.zoom.toFixed(1) + '×';
+      $('scroll-container').style.display = S.zoom > 1 ? 'block' : 'none';
+      renderAll();
+    }
+
+    function updateScrollBar() {
+      if (S.zoom <= 1) return;
+      const thumb = $('scroll-thumb');
+      const container = $('scroll-container');
+      const thumbWidth = Math.max(20, container.offsetWidth / S.zoom);
+      const maxLeft = container.offsetWidth - thumbWidth;
+      thumb.style.width = thumbWidth + 'px';
+      thumb.style.left = (S.scrollOffset * maxLeft) + 'px';
+    }
+
+    // Scroll bar drag
+    let scrollDragging = false, scrollStartX = 0, scrollStartOffset = 0;
+    $('scroll-thumb').addEventListener('mousedown', e => {
+      scrollDragging = true; scrollStartX = e.clientX; scrollStartOffset = S.scrollOffset;
+      e.preventDefault();
+    });
+    document.addEventListener('mousemove', e => {
+      if (!scrollDragging) return;
+      const container = $('scroll-container');
+      const thumbWidth = container.offsetWidth / S.zoom;
+      const maxLeft = container.offsetWidth - thumbWidth;
+      const dx = e.clientX - scrollStartX;
+      S.scrollOffset = Math.max(0, Math.min(1, scrollStartOffset + dx / maxLeft));
+      renderAll();
+    });
+    document.addEventListener('mouseup', () => { scrollDragging = false; });
+
+    // Mouse wheel zoom on timelines
+    ['canvas-original', 'canvas-adjusted', 'canvas-waveform'].forEach(id => {
+      $(id).addEventListener('wheel', e => {
+        e.preventDefault();
+        const delta = e.deltaY > 0 ? 0.8 : 1.25;
+        setZoom(S.zoom * delta);
+      }, { passive: false });
+    });
+
+    // ═══════════════════════════════════════════════════════════
+    // Slider handlers
+    // ═══════════════════════════════════════════════════════════
+    function setupSlider(sliderId, displayId, suffix, decimalPlaces) {
+      $(sliderId).addEventListener('input', () => {
+        const val = parseFloat($(sliderId).value);
+        $(displayId).textContent = val.toFixed(decimalPlaces) + suffix;
+        applyPostProcessing();
+      });
+    }
+    setupSlider('slider-pad-onset', 'val-pad-onset', 's', 3);
+    setupSlider('slider-pad-offset', 'val-pad-offset', 's', 3);
+    setupSlider('slider-min-on', 'val-min-on', 's', 3);
+    setupSlider('slider-min-off', 'val-min-off', 's', 3);
+
+    $('btn-reset-params').addEventListener('click', () => {
+      $('slider-pad-onset').value = DEFAULTS.padOnset;
+      $('slider-pad-offset').value = DEFAULTS.padOffset;
+      $('slider-min-on').value = DEFAULTS.minOn;
+      $('slider-min-off').value = DEFAULTS.minOff;
+      $('val-pad-onset').textContent = DEFAULTS.padOnset.toFixed(3) + 's';
+      $('val-pad-offset').textContent = DEFAULTS.padOffset.toFixed(3) + 's';
+      $('val-min-on').textContent = DEFAULTS.minOn.toFixed(3) + 's';
+      $('val-min-off').textContent = DEFAULTS.minOff.toFixed(3) + 's';
+      applyPostProcessing();
+    });
+
+    // ═══════════════════════════════════════════════════════════
+    // Show / Hide UI
+    // ═══════════════════════════════════════════════════════════
+    function showUI() {
+      ['card-timeline', 'card-controls', 'card-stats', 'card-table', 'card-export'].forEach(id => {
+        $(id).style.display = '';
+      });
+      renderSpeakerLegend();
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // Helpers
+    // ═══════════════════════════════════════════════════════════
+    function fmtTime(sec) {
+      const m = Math.floor(sec / 60);
+      const s = (sec % 60).toFixed(1);
+      return `${String(m).padStart(2, '0')}:${s.padStart(4, '0')}`;
+    }
+    function fmtTimeSec(sec) {
+      if (sec < 60) return sec.toFixed(1) + 's';
+      const m = Math.floor(sec / 60);
+      const s = Math.floor(sec % 60);
+      return `${m}:${String(s).padStart(2, '0')}`;
+    }
+    function getTimeStep(visibleDur, width) {
+      const target = visibleDur / (width / 80);
+      const steps = [0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600];
+      return steps.find(s => s >= target) || 600;
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // Resize handler
+    // ═══════════════════════════════════════════════════════════
+    let resizeTimer;
+    window.addEventListener('resize', () => {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => renderAll(), 100);
+    });
+
+    // ═══════════════════════════════════════════════════════════
+    // Keyboard shortcuts
+    // ═══════════════════════════════════════════════════════════
+    document.addEventListener('keydown', e => {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+      if (e.code === 'Space') { e.preventDefault(); $('btn-play').click(); }
+      if (e.code === 'ArrowRight') { if (audioEl.src) audioEl.currentTime += 5; }
+      if (e.code === 'ArrowLeft') { if (audioEl.src) audioEl.currentTime -= 5; }
+    });
+  </script>
+</body>
+
+</html>

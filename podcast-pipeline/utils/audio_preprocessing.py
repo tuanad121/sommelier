@@ -76,8 +76,8 @@ def standardization(audio, cfg):
     gain = target_dBFS - audio.dBFS
     logger.info(f"Calculating the gain needed for the audio: {gain} dB")
 
-    # Normalize volume and limit gain range to between -3 and 3
-    normalized_audio = audio.apply_gain(min(max(gain, -3), 3))
+    # Normalize volume and limit gain range to between -6 and 6.
+    normalized_audio = audio.apply_gain(min(max(gain, -6), 6))
 
     waveform = np.array(normalized_audio.get_array_of_samples(), dtype=np.float32)
 
