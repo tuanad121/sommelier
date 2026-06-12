@@ -140,7 +140,8 @@ python podcast-pipeline/run_stage_diarization_only.py \
   --boundary-refine-max-shift 0.4 \
   --boundary-refine-step 0.05 \
   --boundary-refine-embed-window 0.4 \
-  --boundary-refine-min-segment 0.6 \
+  --boundary-refine-reference-min-segment 2.0 \
+  --boundary-refine-min-segment 0.3 \
   --boundary-refine-max-gap 0.35 \
   --boundary-refine-min-improvement 0.05 \
   --max_dia_chunk_duration 900 \

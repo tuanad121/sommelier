@@ -202,9 +202,11 @@ def _speaker_reference_embeddings(
     embedding_fn: Callable[[float, float], Any],
     embedding_window: float,
     min_segment: float,
+    reference_min_segment: float | None = None,
 ) -> dict[str, np.ndarray]:
     references: dict[str, list[np.ndarray]] = {}
-    min_reference_duration = max(float(embedding_window), float(min_segment))
+    reference_floor = float(min_segment) if reference_min_segment is None else float(reference_min_segment)
+    min_reference_duration = max(float(embedding_window), reference_floor)
 
     for speaker, rows in df.groupby("speaker"):
         for _, row in rows.sort_values("start").iterrows():
@@ -286,6 +288,7 @@ def refine_speaker_boundaries(
     step: float = 0.05,
     embedding_window: float = 0.4,
     min_segment: float = 0.6,
+    reference_min_segment: float | None = None,
     max_gap: float = 0.35,
     min_improvement: float = 0.05,
     logger=None,
@@ -303,6 +306,7 @@ def refine_speaker_boundaries(
         embedding_fn=embedding_fn,
         embedding_window=float(embedding_window),
         min_segment=float(min_segment),
+        reference_min_segment=reference_min_segment,
     )
     if len(references) < 2:
         if logger is not None:
