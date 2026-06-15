@@ -289,15 +289,13 @@ def _speaker_margin(
     return _cosine_similarity(embedding, positive_reference) - _cosine_similarity(embedding, negative_reference)
 
 
-def _endpoint_speaker_margin(
+def _endpoint_embedding(
     embedding_fn: Callable[[float, float], Any],
     segment_start: float,
     segment_end: float,
     side: str,
-    current_reference: np.ndarray,
-    neighbor_reference: np.ndarray,
     endpoint_window: float,
-) -> float | None:
+) -> np.ndarray | None:
     duration = float(segment_end) - float(segment_start)
     if duration <= 0.0 or float(endpoint_window) <= 0.0:
         return None
@@ -312,21 +310,144 @@ def _endpoint_speaker_margin(
     else:
         raise ValueError(f"Unknown endpoint side: {side}")
 
-    embedding = _adaptive_window_embedding(
+    return _adaptive_window_embedding(
         embedding_fn,
         start,
         end,
         embedding_window=window,
     )
+
+
+def _endpoint_speaker_margin(
+    embedding_fn: Callable[[float, float], Any],
+    segment_start: float,
+    segment_end: float,
+    side: str,
+    current_reference: np.ndarray,
+    neighbor_reference: np.ndarray,
+    endpoint_window: float,
+) -> float | None:
+    embedding = _endpoint_embedding(
+        embedding_fn,
+        segment_start,
+        segment_end,
+        side,
+        endpoint_window,
+    )
     return _speaker_margin(embedding, current_reference, neighbor_reference)
 
 
-def _endpoint_margin_payload(margin: float | None, threshold: float) -> dict[str, Any]:
+def _endpoint_margin_payload(
+    margin: float | None,
+    threshold: float,
+    current_similarity: float | None = None,
+    competing_similarity: float | None = None,
+    competing_speaker: str | None = None,
+) -> dict[str, Any]:
     confirmed = margin is not None and float(margin) >= float(threshold)
-    return {
+    payload: dict[str, Any] = {
         "margin": round(float(margin), 6) if margin is not None else None,
         "confirmed": bool(confirmed),
     }
+    if current_similarity is not None:
+        payload["current_similarity"] = round(float(current_similarity), 6)
+    if competing_similarity is not None:
+        payload["competing_similarity"] = round(float(competing_similarity), 6)
+    if competing_speaker is not None:
+        payload["competing_speaker"] = competing_speaker
+    return payload
+
+
+def _endpoint_speaker_check(
+    embedding_fn: Callable[[float, float], Any],
+    segment_start: float,
+    segment_end: float,
+    side: str,
+    speaker: str,
+    references: dict[str, np.ndarray],
+    endpoint_window: float,
+    endpoint_margin: float,
+) -> dict[str, Any]:
+    current_reference = references.get(str(speaker))
+    if current_reference is None:
+        return _endpoint_margin_payload(None, float(endpoint_margin))
+
+    embedding = _endpoint_embedding(
+        embedding_fn,
+        segment_start,
+        segment_end,
+        side,
+        endpoint_window,
+    )
+    if embedding is None:
+        return _endpoint_margin_payload(None, float(endpoint_margin))
+
+    current_similarity = _cosine_similarity(embedding, current_reference)
+    competing_speaker: str | None = None
+    competing_similarity: float | None = None
+    for other_speaker, other_reference in references.items():
+        if str(other_speaker) == str(speaker):
+            continue
+        similarity = _cosine_similarity(embedding, other_reference)
+        if competing_similarity is None or similarity > competing_similarity:
+            competing_similarity = similarity
+            competing_speaker = str(other_speaker)
+
+    if competing_similarity is None:
+        return _endpoint_margin_payload(None, float(endpoint_margin), current_similarity=current_similarity)
+
+    return _endpoint_margin_payload(
+        current_similarity - competing_similarity,
+        float(endpoint_margin),
+        current_similarity=current_similarity,
+        competing_similarity=competing_similarity,
+        competing_speaker=competing_speaker,
+    )
+
+
+def _segment_endpoint_checks(
+    refined: pd.DataFrame,
+    references: dict[str, np.ndarray],
+    embedding_fn: Callable[[float, float], Any],
+    embedding_window: float,
+    endpoint_window: float | None,
+    endpoint_margin: float,
+) -> dict[int, dict[str, Any]]:
+    gate_window = float(embedding_window) if endpoint_window is None else float(endpoint_window)
+    checks: dict[int, dict[str, Any]] = {}
+    for idx, row in refined.iterrows():
+        speaker = str(row["speaker"])
+        if speaker not in references:
+            continue
+        start = float(row["start"])
+        end = float(row["end"])
+        checks[int(idx)] = {
+            "enabled": True,
+            "speaker": speaker,
+            "window": round(gate_window, 3),
+            "threshold": round(float(endpoint_margin), 6),
+            "head": _endpoint_speaker_check(
+                embedding_fn,
+                start,
+                end,
+                "head",
+                speaker,
+                references,
+                gate_window,
+                float(endpoint_margin),
+            ),
+            "tail": _endpoint_speaker_check(
+                embedding_fn,
+                start,
+                end,
+                "tail",
+                speaker,
+                references,
+                gate_window,
+                float(endpoint_margin),
+            ),
+        }
+    return checks
 
 
 def _nested_short_segment_score(
@@ -408,8 +529,7 @@ def _refine_nested_short_segments(
     nested_max_segment: float,
     min_improvement: float,
     endpoint_gate: bool,
-    endpoint_window: float | None,
-    endpoint_margin: float,
+    endpoint_checks: dict[int, dict[str, Any]] | None,
 ) -> tuple[pd.DataFrame, list[dict[str, Any]]]:
     if float(nested_max_segment) <= 0.0:
         return refined, []
@@ -448,41 +568,20 @@ def _refine_nested_short_segments(
 
             endpoint_gate_payload: dict[str, Any] | None = None
             if bool(endpoint_gate):
-                gate_window = (
-                    float(embedding_window)
-                    if endpoint_window is None
-                    else float(endpoint_window)
-                )
-                short_head_margin = _endpoint_speaker_margin(
-                    embedding_fn,
-                    short_start,
-                    short_end,
-                    "head",
-                    references[short_speaker],
-                    references[container_speaker],
-                    gate_window,
-                )
-                short_tail_margin = _endpoint_speaker_margin(
-                    embedding_fn,
-                    short_start,
-                    short_end,
-                    "tail",
-                    references[short_speaker],
-                    references[container_speaker],
-                    gate_window,
-                )
-                endpoint_gate_payload = {
-                    "enabled": True,
-                    "window": round(gate_window, 3),
-                    "threshold": round(float(endpoint_margin), 6),
-                    "short_head": _endpoint_margin_payload(short_head_margin, float(endpoint_margin)),
-                    "short_tail": _endpoint_margin_payload(short_tail_margin, float(endpoint_margin)),
-                }
-                if (
-                    endpoint_gate_payload["short_head"]["confirmed"]
-                    and endpoint_gate_payload["short_tail"]["confirmed"]
-                ):
-                    continue
+                short_endpoint_check = (endpoint_checks or {}).get(int(short_idx))
+                if short_endpoint_check is not None:
+                    endpoint_gate_payload = {
+                        "enabled": True,
+                        "window": short_endpoint_check["window"],
+                        "threshold": short_endpoint_check["threshold"],
+                        "short_head": short_endpoint_check["head"],
+                        "short_tail": short_endpoint_check["tail"],
+                    }
+                    if (
+                        endpoint_gate_payload["short_head"]["confirmed"]
+                        and endpoint_gate_payload["short_tail"]["confirmed"]
+                    ):
+                        continue
 
             original_score = _nested_short_segment_score(
                 embedding_fn,
@@ -604,8 +703,8 @@ def refine_speaker_boundaries(
     logger=None,
 ) -> tuple[pd.DataFrame, list[dict[str, Any]]]:
     """
-    Move close speaker-change boundaries toward the point that best matches each
-    adjacent speaker's reference embedding.
+    Precheck each segment head/tail against all speaker references, then move
+    only the boundaries whose relevant endpoints are not already confirmed.
     """
     if df is None or df.empty or len(df) < 2:
         return df, []
@@ -623,6 +722,19 @@ def refine_speaker_boundaries(
             logger.warning("Speaker boundary refinement skipped: not enough speaker references.")
         return refined, []
 
+    endpoint_checks = (
+        _segment_endpoint_checks(
+            refined,
+            references=references,
+            embedding_fn=embedding_fn,
+            embedding_window=float(embedding_window),
+            endpoint_window=endpoint_window,
+            endpoint_margin=float(endpoint_margin),
+        )
+        if bool(endpoint_gate)
+        else None
+    )
+
     refined, adjustments = _refine_nested_short_segments(
         refined,
         references=references,
@@ -634,8 +746,7 @@ def refine_speaker_boundaries(
         nested_max_segment=float(nested_max_segment),
         min_improvement=float(min_improvement),
         endpoint_gate=bool(endpoint_gate),
-        endpoint_window=endpoint_window,
-        endpoint_margin=float(endpoint_margin),
+        endpoint_checks=endpoint_checks,
     )
 
     for idx in range(len(refined) - 1):
@@ -666,41 +777,21 @@ def refine_speaker_boundaries(
 
         endpoint_gate_payload: dict[str, Any] | None = None
         if bool(endpoint_gate):
-            gate_window = (
-                float(embedding_window)
-                if endpoint_window is None
-                else float(endpoint_window)
-            )
-            left_tail_margin = _endpoint_speaker_margin(
-                embedding_fn,
-                left_start,
-                left_end,
-                "tail",
-                references[left_speaker],
-                references[right_speaker],
-                gate_window,
-            )
-            right_head_margin = _endpoint_speaker_margin(
-                embedding_fn,
-                right_start,
-                right_end,
-                "head",
-                references[right_speaker],
-                references[left_speaker],
-                gate_window,
-            )
-            endpoint_gate_payload = {
-                "enabled": True,
-                "window": round(gate_window, 3),
-                "threshold": round(float(endpoint_margin), 6),
-                "left_tail": _endpoint_margin_payload(left_tail_margin, float(endpoint_margin)),
-                "right_head": _endpoint_margin_payload(right_head_margin, float(endpoint_margin)),
-            }
-            if (
-                endpoint_gate_payload["left_tail"]["confirmed"]
-                and endpoint_gate_payload["right_head"]["confirmed"]
-            ):
-                continue
+            left_endpoint_check = (endpoint_checks or {}).get(int(idx))
+            right_endpoint_check = (endpoint_checks or {}).get(int(idx + 1))
+            if left_endpoint_check is not None and right_endpoint_check is not None:
+                endpoint_gate_payload = {
+                    "enabled": True,
+                    "window": left_endpoint_check["window"],
+                    "threshold": left_endpoint_check["threshold"],
+                    "left_tail": left_endpoint_check["tail"],
+                    "right_head": right_endpoint_check["head"],
+                }
+                if (
+                    endpoint_gate_payload["left_tail"]["confirmed"]
+                    and endpoint_gate_payload["right_head"]["confirmed"]
+                ):
+                    continue
 
         original_score = _boundary_score(
             embedding_fn,

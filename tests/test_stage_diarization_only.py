@@ -229,6 +229,60 @@ class StageDiarizationOnlyTests(unittest.TestCase):
         self.assertEqual(adjustments[0]["left_speaker"], "SPEAKER_00")
         self.assertEqual(adjustments[0]["right_speaker"], "SPEAKER_01")
 
+    def test_refine_speaker_boundaries_endpoint_gate_checks_all_speakers(self):
+        import numpy as np
+        import pandas as pd
+
+        from utils.stage_diarization import refine_speaker_boundaries
+
+        third_speaker = np.array([0.95, 0.31])
+        third_speaker = third_speaker / np.linalg.norm(third_speaker)
+
+        diarization = pd.DataFrame(
+            [
+                {"speaker": "SPEAKER_00", "start": 0.0, "end": 3.0},
+                {"speaker": "SPEAKER_01", "start": 4.0, "end": 7.0},
+                {"speaker": "SPEAKER_02", "start": 8.0, "end": 11.0},
+                {"speaker": "SPEAKER_00", "start": 12.0, "end": 13.2},
+                {"speaker": "SPEAKER_01", "start": 13.2, "end": 14.2},
+            ]
+        )
+
+        def fake_embedding(start: float, end: float):
+            if 0.0 <= start and end <= 3.0:
+                return np.array([1.0, 0.0])
+            if 4.0 <= start and end <= 7.0:
+                return np.array([0.0, 1.0])
+            if 8.0 <= start and end <= 11.0:
+                return third_speaker
+            if 13.0 < start and end <= 13.2:
+                return third_speaker
+            if end <= 13.0:
+                return np.array([1.0, 0.0])
+            if start >= 13.0:
+                return np.array([0.0, 1.0])
+            return None
+
+        refined, adjustments = refine_speaker_boundaries(
+            diarization,
+            embedding_fn=fake_embedding,
+            max_shift=0.4,
+            step=0.1,
+            embedding_window=0.2,
+            min_segment=0.4,
+            reference_min_segment=2.0,
+            max_gap=0.5,
+            min_improvement=0.1,
+            endpoint_gate=True,
+            endpoint_window=0.1,
+            endpoint_margin=0.05,
+        )
+
+        self.assertEqual(round(float(refined.loc[3, "end"]), 3), 13.0)
+        self.assertEqual(round(float(refined.loc[4, "start"]), 3), 13.0)
+        self.assertEqual(len(adjustments), 1)
+        self.assertEqual(adjustments[0]["endpoint_gate"]["left_tail"]["competing_speaker"], "SPEAKER_02")
+
     def test_refine_speaker_boundaries_endpoint_gate_keeps_confirmed_nested_segment(self):
         import numpy as np
         import pandas as pd
