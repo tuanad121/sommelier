@@ -105,20 +105,91 @@ def build_global_references(
     if df is None or df.empty:
         return references, report
 
+    # Pre-calculate all intervals for all other speakers to easily find overlaps
+    all_other_segments = {}
+    for spk, rows in df.groupby("speaker"):
+        intervals = sorted([(float(row["start"]), float(row["end"])) for _, row in rows.iterrows()])
+        merged = []
+        for s, e in intervals:
+            if merged and merged[-1][1] >= s:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], e))
+            else:
+                merged.append((s, e))
+        all_other_segments[str(spk)] = merged
+
     for speaker, rows in df.groupby("speaker"):
         speaker_key = str(speaker)
-        candidates = rows.copy()
-        candidates["duration"] = candidates["end"].astype(float) - candidates["start"].astype(float)
-        candidates = candidates[candidates["duration"] >= float(min_segment_duration)]
-        candidates = candidates.sort_values("duration", ascending=False)
+        
+        # Collect and merge all intervals from all *other* speakers
+        other_intervals = []
+        for other_spk, intervals in all_other_segments.items():
+            if other_spk != speaker_key:
+                other_intervals.extend(intervals)
+        
+        other_intervals.sort()
+        pollution_mask = []
+        for s, e in other_intervals:
+            if pollution_mask and pollution_mask[-1][1] >= s:
+                pollution_mask[-1] = (pollution_mask[-1][0], max(pollution_mask[-1][1], e))
+            else:
+                pollution_mask.append((s, e))
+
+        pure_chunks = []
+        for _, row in rows.iterrows():
+            start = float(row["start"])
+            end = float(row["end"])
+            
+            current_start = start
+            chunks = []
+            for o_start, o_end in pollution_mask:
+                if o_end <= current_start:
+                    continue
+                if o_start >= end:
+                    break
+                if o_start > current_start:
+                    chunks.append((current_start, o_start))
+                current_start = max(current_start, o_end)
+            if current_start < end:
+                chunks.append((current_start, end))
+                
+            is_naturally_clean = len(chunks) == 1 and chunks[0][0] == start and chunks[0][1] == end
+            
+            for c_start, c_end in chunks:
+                pure_chunks.append({
+                    "start": c_start, 
+                    "end": c_end, 
+                    "duration": c_end - c_start, 
+                    "is_naturally_clean": is_naturally_clean,
+                    "type": "naturally_clean" if is_naturally_clean else "pure_chunk"
+                })
+
+        # Tier 1 & 2: Pure chunks >= min_duration. Sort by naturally clean first, then duration.
+        tier1_2 = [c for c in pure_chunks if c["duration"] >= float(min_segment_duration)]
+        tier1_2.sort(key=lambda x: (x["is_naturally_clean"], x["duration"]), reverse=True)
+        
+        # Tier 3: All pure chunks, disregarding min_duration constraint.
+        tier3 = list(pure_chunks)
+        tier3.sort(key=lambda x: (x["is_naturally_clean"], x["duration"]), reverse=True)
+        
+        # Tier 4: Fallback to original overlapping segments
+        tier4 = [{"start": float(r["start"]), "end": float(r["end"]), "duration": float(r["end"]) - float(r["start"]), "type": "original_overlap"} for _, r in rows.iterrows()]
+        tier4.sort(key=lambda x: x["duration"], reverse=True)
+        
+        # Selection Waterfall
+        if tier1_2:
+            candidates = tier1_2
+        elif tier3:
+            candidates = tier3
+        else:
+            candidates = tier4
 
         embeddings: list[np.ndarray] = []
         used_segments: list[dict[str, float]] = []
-        for _, row in candidates.iterrows():
+        for row in candidates:
             if len(embeddings) >= int(max_segments_per_speaker):
                 break
-            start = float(row["start"])
-            end = float(row["end"])
+            start = row["start"]
+            end = row["end"]
             try:
                 embedding = _as_embedding(embedding_fn(start, end))
             except Exception:
@@ -126,7 +197,12 @@ def build_global_references(
             if embedding is None:
                 continue
             embeddings.append(embedding)
-            used_segments.append({"start": round(start, 3), "end": round(end, 3)})
+            used_segments.append({
+                "start": round(start, 3), 
+                "end": round(end, 3), 
+                "duration": round(row["duration"], 3),
+                "type": row["type"]
+            })
 
         report[speaker_key] = {
             "segment_count": len(embeddings),
