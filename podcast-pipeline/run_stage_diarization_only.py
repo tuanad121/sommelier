@@ -354,6 +354,9 @@ def process_audio(
             "min_segment": float(args.boundary_refine_min_segment),
             "max_gap": float(args.boundary_refine_max_gap),
             "min_improvement": float(args.boundary_refine_min_improvement),
+            "endpoint_gate": bool(args.boundary_refine_endpoint_gate),
+            "endpoint_window": float(args.boundary_refine_endpoint_window),
+            "endpoint_margin": float(args.boundary_refine_endpoint_margin),
             "speaker_embedder_loaded": speaker_embedder is not None,
         }
         boundary_refinements: list[dict[str, Any]] = []
@@ -388,6 +391,9 @@ def process_audio(
                     nested_max_segment=float(args.boundary_refine_nested_max_segment),
                     max_gap=float(args.boundary_refine_max_gap),
                     min_improvement=float(args.boundary_refine_min_improvement),
+                    endpoint_gate=bool(args.boundary_refine_endpoint_gate),
+                    endpoint_window=float(args.boundary_refine_endpoint_window),
+                    endpoint_margin=float(args.boundary_refine_endpoint_margin),
                     logger=logger,
                 )
             boundary_refinement_report = write_boundary_refinement_report(
@@ -417,6 +423,9 @@ def process_audio(
                 "boundary_refine_min_segment": float(args.boundary_refine_min_segment),
                 "boundary_refine_max_gap": float(args.boundary_refine_max_gap),
                 "boundary_refine_min_improvement": float(args.boundary_refine_min_improvement),
+                "boundary_refine_endpoint_gate": bool(args.boundary_refine_endpoint_gate),
+                "boundary_refine_endpoint_window": float(args.boundary_refine_endpoint_window),
+                "boundary_refine_endpoint_margin": float(args.boundary_refine_endpoint_margin),
                 "processing_time_seconds": dia_end - dia_start,
                 "rt_factor": rt,
                 "speaker_link_threshold": float(args.speaker_link_threshold),
@@ -472,6 +481,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--boundary-refine-min-segment", type=float, default=0.3, help="Minimum segment duration preserved after boundary refinement.")
     parser.add_argument("--boundary-refine-max-gap", type=float, default=0.35, help="Only refine adjacent speaker turns whose gap or overlap is within this many seconds.")
     parser.add_argument("--boundary-refine-min-improvement", type=float, default=0.05, help="Minimum embedding-score improvement required to accept a boundary shift.")
+    parser.add_argument("--boundary-refine-endpoint-gate", action=argparse.BooleanOptionalAction, default=True, help="Before adjacent boundary search, keep boundaries whose left tail and right head already match their assigned speakers.")
+    parser.add_argument("--boundary-refine-endpoint-window", type=float, default=0.4, help="Seconds from each segment head/tail used by endpoint gate speaker checks.")
+    parser.add_argument("--boundary-refine-endpoint-margin", type=float, default=0.05, help="Minimum current-vs-neighbor speaker embedding margin required for endpoint gate confirmation.")
     parser.add_argument("--speaker-link-threshold", type=float, default=0.75, help="Cosine similarity threshold for linking speakers across chunks.")
     parser.add_argument("--diar_device_index", type=int, default=0, help="CUDA device index for VAD and speaker embedding. Use -1 for CPU.")
     parser.add_argument("--sortformer_device_index", type=int, default=0, help="CUDA device index for Sortformer. Use -1 for CPU.")

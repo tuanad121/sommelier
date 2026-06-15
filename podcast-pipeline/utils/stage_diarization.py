@@ -289,6 +289,46 @@ def _speaker_margin(
     return _cosine_similarity(embedding, positive_reference) - _cosine_similarity(embedding, negative_reference)
 
 
+def _endpoint_speaker_margin(
+    embedding_fn: Callable[[float, float], Any],
+    segment_start: float,
+    segment_end: float,
+    side: str,
+    current_reference: np.ndarray,
+    neighbor_reference: np.ndarray,
+    endpoint_window: float,
+) -> float | None:
+    duration = float(segment_end) - float(segment_start)
+    if duration <= 0.0 or float(endpoint_window) <= 0.0:
+        return None
+
+    window = min(float(endpoint_window), duration)
+    if side == "head":
+        start = float(segment_start)
+        end = min(float(segment_end), start + window)
+    elif side == "tail":
+        end = float(segment_end)
+        start = max(float(segment_start), end - window)
+    else:
+        raise ValueError(f"Unknown endpoint side: {side}")
+
+    embedding = _adaptive_window_embedding(
+        embedding_fn,
+        start,
+        end,
+        embedding_window=window,
+    )
+    return _speaker_margin(embedding, current_reference, neighbor_reference)
+
+
+def _endpoint_margin_payload(margin: float | None, threshold: float) -> dict[str, Any]:
+    confirmed = margin is not None and float(margin) >= float(threshold)
+    return {
+        "margin": round(float(margin), 6) if margin is not None else None,
+        "confirmed": bool(confirmed),
+    }
+
+
 def _nested_short_segment_score(
     embedding_fn: Callable[[float, float], Any],
     candidate_start: float,
@@ -367,6 +407,9 @@ def _refine_nested_short_segments(
     min_segment: float,
     nested_max_segment: float,
     min_improvement: float,
+    endpoint_gate: bool,
+    endpoint_window: float | None,
+    endpoint_margin: float,
 ) -> tuple[pd.DataFrame, list[dict[str, Any]]]:
     if float(nested_max_segment) <= 0.0:
         return refined, []
@@ -402,6 +445,44 @@ def _refine_nested_short_segments(
                 continue
             if container_end - container_start <= short_duration:
                 continue
+
+            endpoint_gate_payload: dict[str, Any] | None = None
+            if bool(endpoint_gate):
+                gate_window = (
+                    float(embedding_window)
+                    if endpoint_window is None
+                    else float(endpoint_window)
+                )
+                short_head_margin = _endpoint_speaker_margin(
+                    embedding_fn,
+                    short_start,
+                    short_end,
+                    "head",
+                    references[short_speaker],
+                    references[container_speaker],
+                    gate_window,
+                )
+                short_tail_margin = _endpoint_speaker_margin(
+                    embedding_fn,
+                    short_start,
+                    short_end,
+                    "tail",
+                    references[short_speaker],
+                    references[container_speaker],
+                    gate_window,
+                )
+                endpoint_gate_payload = {
+                    "enabled": True,
+                    "window": round(gate_window, 3),
+                    "threshold": round(float(endpoint_margin), 6),
+                    "short_head": _endpoint_margin_payload(short_head_margin, float(endpoint_margin)),
+                    "short_tail": _endpoint_margin_payload(short_tail_margin, float(endpoint_margin)),
+                }
+                if (
+                    endpoint_gate_payload["short_head"]["confirmed"]
+                    and endpoint_gate_payload["short_tail"]["confirmed"]
+                ):
+                    continue
 
             original_score = _nested_short_segment_score(
                 embedding_fn,
@@ -471,6 +552,8 @@ def _refine_nested_short_segments(
                             "score_after": round(best_score, 6),
                             "score_improvement": round(best_score - score_before, 6),
                         }
+                        if endpoint_gate_payload is not None:
+                            best_adjustment["endpoint_gate"] = endpoint_gate_payload
 
         if best_adjustment is None or best_score is None:
             continue
@@ -515,6 +598,9 @@ def refine_speaker_boundaries(
     nested_max_segment: float = 1.0,
     max_gap: float = 0.35,
     min_improvement: float = 0.05,
+    endpoint_gate: bool = False,
+    endpoint_window: float | None = None,
+    endpoint_margin: float = 0.05,
     logger=None,
 ) -> tuple[pd.DataFrame, list[dict[str, Any]]]:
     """
@@ -547,6 +633,9 @@ def refine_speaker_boundaries(
         min_segment=float(min_segment),
         nested_max_segment=float(nested_max_segment),
         min_improvement=float(min_improvement),
+        endpoint_gate=bool(endpoint_gate),
+        endpoint_window=endpoint_window,
+        endpoint_margin=float(endpoint_margin),
     )
 
     for idx in range(len(refined) - 1):
@@ -574,6 +663,44 @@ def refine_speaker_boundaries(
         upper = min(original_boundary + float(max_shift), right_end - float(min_segment))
         if lower > upper:
             continue
+
+        endpoint_gate_payload: dict[str, Any] | None = None
+        if bool(endpoint_gate):
+            gate_window = (
+                float(embedding_window)
+                if endpoint_window is None
+                else float(endpoint_window)
+            )
+            left_tail_margin = _endpoint_speaker_margin(
+                embedding_fn,
+                left_start,
+                left_end,
+                "tail",
+                references[left_speaker],
+                references[right_speaker],
+                gate_window,
+            )
+            right_head_margin = _endpoint_speaker_margin(
+                embedding_fn,
+                right_start,
+                right_end,
+                "head",
+                references[right_speaker],
+                references[left_speaker],
+                gate_window,
+            )
+            endpoint_gate_payload = {
+                "enabled": True,
+                "window": round(gate_window, 3),
+                "threshold": round(float(endpoint_margin), 6),
+                "left_tail": _endpoint_margin_payload(left_tail_margin, float(endpoint_margin)),
+                "right_head": _endpoint_margin_payload(right_head_margin, float(endpoint_margin)),
+            }
+            if (
+                endpoint_gate_payload["left_tail"]["confirmed"]
+                and endpoint_gate_payload["right_head"]["confirmed"]
+            ):
+                continue
 
         original_score = _boundary_score(
             embedding_fn,
@@ -615,23 +742,24 @@ def refine_speaker_boundaries(
         best_boundary = round(float(best_boundary), 3)
         refined.loc[idx, "end"] = best_boundary
         refined.loc[idx + 1, "start"] = best_boundary
-        adjustments.append(
-            {
-                "type": "adjacent_boundary_shift",
-                "left_index": int(idx),
-                "right_index": int(idx + 1),
-                "left_speaker": left_speaker,
-                "right_speaker": right_speaker,
-                "old_left_end": round(left_end, 3),
-                "old_right_start": round(right_start, 3),
-                "old_boundary": round(original_boundary, 3),
-                "new_boundary": best_boundary,
-                "shift_seconds": round(best_boundary - original_boundary, 3),
-                "score_before": round(score_before, 6),
-                "score_after": round(float(best_score), 6),
-                "score_improvement": round(improvement, 6),
-            }
-        )
+        adjustment = {
+            "type": "adjacent_boundary_shift",
+            "left_index": int(idx),
+            "right_index": int(idx + 1),
+            "left_speaker": left_speaker,
+            "right_speaker": right_speaker,
+            "old_left_end": round(left_end, 3),
+            "old_right_start": round(right_start, 3),
+            "old_boundary": round(original_boundary, 3),
+            "new_boundary": best_boundary,
+            "shift_seconds": round(best_boundary - original_boundary, 3),
+            "score_before": round(score_before, 6),
+            "score_after": round(float(best_score), 6),
+            "score_improvement": round(improvement, 6),
+        }
+        if endpoint_gate_payload is not None:
+            adjustment["endpoint_gate"] = endpoint_gate_payload
+        adjustments.append(adjustment)
 
     if logger is not None:
         logger.info(f"Speaker boundary refinement adjusted {len(adjustments)} boundaries.")

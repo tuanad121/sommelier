@@ -8,6 +8,17 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class KaggleStageDiarizationNotebookTests(unittest.TestCase):
+    def test_stage1_update_source_notebook_has_endpoint_gate_controls(self):
+        notebook = json.loads((ROOT / "kaggle_notebooks" / "stage1_updated.ipynb").read_text(encoding="utf-8"))
+        joined = "\n".join("".join(cell.get("source", [])) for cell in notebook["cells"])
+
+        self.assertTrue("BOUNDARY_REFINE_ENDPOINT_GATE = True" in joined, "missing endpoint gate config")
+        self.assertTrue("BOUNDARY_REFINE_ENDPOINT_WINDOW = 0.4" in joined, "missing endpoint window config")
+        self.assertTrue("BOUNDARY_REFINE_ENDPOINT_MARGIN = 0.05" in joined, "missing endpoint margin config")
+        self.assertTrue("--boundary-refine-endpoint-gate" in joined, "missing endpoint gate CLI flag")
+        self.assertTrue("--boundary-refine-endpoint-window" in joined, "missing endpoint window CLI flag")
+        self.assertTrue("--boundary-refine-endpoint-margin" in joined, "missing endpoint margin CLI flag")
+
     def test_notebook_runs_one_manual_audio_path_and_prints_results(self):
         notebook = json.loads((ROOT / "kaggle_notebooks" / "07_stage_diarization_only.ipynb").read_text(encoding="utf-8"))
         joined = "\n".join("".join(cell.get("source", [])) for cell in notebook["cells"])
@@ -52,12 +63,18 @@ class KaggleStageDiarizationNotebookTests(unittest.TestCase):
         self.assertIn("BOUNDARY_REFINE_MIN_SEGMENT = 0.3", joined)
         self.assertIn("BOUNDARY_REFINE_MAX_GAP = 0.35", joined)
         self.assertIn("BOUNDARY_REFINE_MIN_IMPROVEMENT = 0.05", joined)
+        self.assertIn("BOUNDARY_REFINE_ENDPOINT_GATE = True", joined)
+        self.assertIn("BOUNDARY_REFINE_ENDPOINT_WINDOW = 0.4", joined)
+        self.assertIn("BOUNDARY_REFINE_ENDPOINT_MARGIN = 0.05", joined)
         self.assertIn("Bật/tắt bước tự chỉnh ranh giới giữa 2 speaker", joined)
         self.assertIn("Giới hạn boundary được dịch tối đa", joined)
         self.assertIn("Chỉ dùng segment đủ dài để tạo speaker reference embedding", joined)
         self.assertIn("Segment ngắn nằm lọt trong segment khác", joined)
         self.assertIn("giữ thấp để không khóa backchannel ngắn", joined)
         self.assertIn("print('  speaker_boundary_refinement =', SPEAKER_BOUNDARY_REFINEMENT)", joined)
+        self.assertIn("print('  boundary_refine_endpoint_gate =', BOUNDARY_REFINE_ENDPOINT_GATE)", joined)
+        self.assertIn("print('  boundary_refine_endpoint_window =', BOUNDARY_REFINE_ENDPOINT_WINDOW)", joined)
+        self.assertIn("print('  boundary_refine_endpoint_margin =', BOUNDARY_REFINE_ENDPOINT_MARGIN)", joined)
         self.assertIn("SORTFORMER_POSTPROCESSING = True", joined)
         self.assertIn("SORTFORMER_POSTPROCESSING_YAML = OUTPUT_ROOT / 'sortformer_postprocessing.yaml'", joined)
         self.assertIn("SORTFORMER_PP_ONSET = 0.3", joined)
@@ -101,6 +118,9 @@ class KaggleStageDiarizationNotebookTests(unittest.TestCase):
         self.assertIn("--boundary-refine-min-segment", joined)
         self.assertIn("--boundary-refine-max-gap", joined)
         self.assertIn("--boundary-refine-min-improvement", joined)
+        self.assertIn("--boundary-refine-endpoint-gate", joined)
+        self.assertIn("--boundary-refine-endpoint-window", joined)
+        self.assertIn("--boundary-refine-endpoint-margin", joined)
         self.assertIn("--input_audio_path", joined)
         self.assertNotIn("--input_folder_path", joined)
         self.assertIn("diarization.json", joined)
@@ -140,6 +160,10 @@ class KaggleStageDiarizationNotebookTests(unittest.TestCase):
         self.assertIn('"BOUNDARY_REFINE_MIN_SEGMENT": "0.3"', builder)
         self.assertIn('"BOUNDARY_REFINE_MAX_GAP": "0.35"', builder)
         self.assertIn('"BOUNDARY_REFINE_MIN_IMPROVEMENT": "0.05"', builder)
+        self.assertIn('"BOUNDARY_REFINE_ENDPOINT_GATE"', builder)
+        self.assertIn('"BOUNDARY_REFINE_ENDPOINT_GATE": "True"', builder)
+        self.assertIn('"BOUNDARY_REFINE_ENDPOINT_WINDOW": "0.4"', builder)
+        self.assertIn('"BOUNDARY_REFINE_ENDPOINT_MARGIN": "0.05"', builder)
         self.assertIn('"SORTFORMER_SPKCACHE_LEN": "200"', builder)
         self.assertIn('"SORTFORMER_PP_ONSET": "0.3"', builder)
         self.assertIn('"SORTFORMER_PP_OFFSET": "0.33"', builder)
