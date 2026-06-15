@@ -31,14 +31,19 @@ from utils.diarization import (
     split_long_segments,
 )
 from utils.logger import Logger
+from utils.speaker_resegmentation import (
+    AuditConfig,
+    LocalActivity,
+    apply_resegmentation_audit,
+    build_global_references,
+    write_resegmentation_report,
+)
 from utils.stage_diarization import (
     apply_sortformer_streaming_config,
     build_run_dir,
     collect_audio_paths,
-    refine_speaker_boundaries,
     resolve_config_path,
     resolve_sortformer_postprocessing_yaml,
-    write_boundary_refinement_report,
     write_input_artifacts,
 )
 from utils.tool import check_env, detect_gpu, load_cfg
@@ -214,6 +219,116 @@ def _compute_chunk_speaker_centroids(chunk_df: pd.DataFrame, audio_info, embedde
     return centroids
 
 
+def _resegmentation_config_from_args(args) -> AuditConfig:
+    return AuditConfig(
+        enabled=bool(args.speaker_resegmentation_audit),
+        boundary_window=float(args.resegmentation_boundary_window),
+        interior_min_duration=float(args.resegmentation_interior_min_duration),
+        max_shift=float(args.resegmentation_max_shift),
+        max_extend=float(args.resegmentation_max_extend),
+        min_duration=float(args.resegmentation_min_duration),
+        min_overlap_duration=float(args.resegmentation_min_overlap_duration),
+        min_mapping_score=float(args.resegmentation_min_mapping_score),
+        min_mapping_margin=float(args.resegmentation_min_mapping_margin),
+    )
+
+
+def _load_local_resegmentation_pipeline(args, cfg: dict[str, Any], device: torch.device, logger):
+    if not bool(args.speaker_resegmentation_audit):
+        return None
+    try:
+        from pyannote.audio import Pipeline
+
+        pipeline = Pipeline.from_pretrained(
+            args.resegmentation_pyannote_model_name,
+            use_auth_token=cfg.get("huggingface_token"),
+        )
+        if hasattr(pipeline, "to"):
+            pipeline.to(device)
+        logger.info(f"Local pyannote resegmentation pipeline loaded: {args.resegmentation_pyannote_model_name}")
+        return pipeline
+    except Exception as exc:
+        logger.warning(f"Failed to load local pyannote resegmentation pipeline; audit will report no local activity: {exc}")
+        return None
+
+
+def _build_local_activity_provider(
+    *,
+    audio_info: dict[str, Any],
+    run_dir: Path,
+    local_pipeline,
+    speaker_embedder: Inference | None,
+    min_duration: float,
+    logger,
+):
+    if local_pipeline is None or speaker_embedder is None:
+        return None
+
+    full_audio_path = Path(run_dir) / "00_input" / "full.wav"
+    try:
+        full_audio_segment = AudioSegment.from_file(full_audio_path)
+    except Exception as exc:
+        logger.warning(f"Cannot open full audio for local resegmentation audit: {exc}")
+        return None
+
+    def provider(region) -> list[LocalActivity]:
+        start_ms = max(0, int(round(float(region.start) * 1000)))
+        end_ms = max(start_ms, int(round(float(region.end) * 1000)))
+        if end_ms <= start_ms:
+            return []
+
+        temp_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as handle:
+                temp_path = Path(handle.name)
+            full_audio_segment[start_ms:end_ms].export(temp_path, format="wav")
+            annotation = local_pipeline(str(temp_path))
+        except Exception as exc:
+            logger.warning(f"Local pyannote resegmentation failed for {region.start:.3f}-{region.end:.3f}s: {exc}")
+            return []
+        finally:
+            if temp_path is not None:
+                try:
+                    temp_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+        activities: list[LocalActivity] = []
+        try:
+            tracks = annotation.itertracks(yield_label=True)
+        except Exception:
+            return []
+
+        for turn, _, local_label in tracks:
+            abs_start = round(float(region.start) + float(turn.start), 3)
+            abs_end = round(float(region.start) + float(turn.end), 3)
+            duration = abs_end - abs_start
+            if duration < float(min_duration):
+                continue
+            embedding = _extract_speaker_embedding(
+                audio_info,
+                abs_start,
+                abs_end,
+                embedder=speaker_embedder,
+                sample_window=max(duration, float(min_duration)),
+                min_duration=max(0.05, min(float(min_duration), duration)),
+            )
+            if embedding is None:
+                continue
+            activities.append(
+                LocalActivity(
+                    local_speaker=str(local_label),
+                    start=abs_start,
+                    end=abs_end,
+                    embedding=embedding,
+                )
+            )
+
+        return activities
+
+    return provider
+
+
 def align_speakers_across_chunks(
     chunk_frames: list[pd.DataFrame],
     audio_info,
@@ -280,6 +395,7 @@ def process_audio(
     vad_model,
     diar_model,
     speaker_embedder,
+    local_resegmentation_pipeline=None,
 ) -> Path:
     target_sr = int(cfg["entrypoint"]["SAMPLE_RATE"])
     proc_audio_path, opus_temp_dir = convert_opus_to_wav_if_needed(audio_path, target_sr=target_sr, logger=logger)
@@ -344,63 +460,55 @@ def process_audio(
         else:
             speakerdia = pd.DataFrame(columns=["segment", "label", "speaker", "start", "end"])
 
-        boundary_refine_parameters = {
-            "enabled": bool(args.speaker_boundary_refinement),
-            "max_shift": float(args.boundary_refine_max_shift),
-            "step": float(args.boundary_refine_step),
-            "embedding_window": float(args.boundary_refine_embed_window),
-            "reference_min_segment": float(args.boundary_refine_reference_min_segment),
-            "nested_max_segment": float(args.boundary_refine_nested_max_segment),
-            "min_segment": float(args.boundary_refine_min_segment),
-            "max_gap": float(args.boundary_refine_max_gap),
-            "min_improvement": float(args.boundary_refine_min_improvement),
-            "endpoint_gate": bool(args.boundary_refine_endpoint_gate),
-            "endpoint_window": float(args.boundary_refine_endpoint_window),
-            "endpoint_margin": float(args.boundary_refine_endpoint_margin),
-            "speaker_embedder_loaded": speaker_embedder is not None,
+        resegmentation_report_path = None
+        resegmentation_report: dict[str, Any] = {
+            "metadata": {"enabled": bool(args.speaker_resegmentation_audit), "adjustment_count": 0},
+            "adjustments": [],
+            "skipped_regions": [],
         }
-        boundary_refinements: list[dict[str, Any]] = []
-        boundary_refinement_report = None
-        if bool(args.speaker_boundary_refinement):
+        if bool(args.speaker_resegmentation_audit):
             if speaker_embedder is None:
-                logger.warning("Speaker boundary refinement enabled but speaker embedder is unavailable; skipping.")
+                logger.warning("Speaker resegmentation audit enabled but speaker embedder is unavailable; skipping.")
             else:
-                def boundary_embedding_fn(start: float, end: float):
+                audit_config = _resegmentation_config_from_args(args)
+
+                def reference_embedding_fn(start: float, end: float):
                     duration = max(0.0, float(end) - float(start))
-                    min_duration = max(
-                        0.05,
-                        min(float(args.boundary_refine_embed_window) * 0.75, duration),
-                    )
                     return _extract_speaker_embedding(
                         audio,
                         start,
                         end,
                         embedder=speaker_embedder,
-                        sample_window=max(duration, 0.05),
-                        min_duration=min_duration,
+                        sample_window=max(duration, float(args.resegmentation_reference_min_segment)),
+                        min_duration=max(0.05, min(float(args.resegmentation_reference_min_segment), duration)),
                     )
 
-                speakerdia, boundary_refinements = refine_speaker_boundaries(
+                references, reference_report = build_global_references(
                     speakerdia,
-                    embedding_fn=boundary_embedding_fn,
-                    max_shift=float(args.boundary_refine_max_shift),
-                    step=float(args.boundary_refine_step),
-                    embedding_window=float(args.boundary_refine_embed_window),
-                    min_segment=float(args.boundary_refine_min_segment),
-                    reference_min_segment=float(args.boundary_refine_reference_min_segment),
-                    nested_max_segment=float(args.boundary_refine_nested_max_segment),
-                    max_gap=float(args.boundary_refine_max_gap),
-                    min_improvement=float(args.boundary_refine_min_improvement),
-                    endpoint_gate=bool(args.boundary_refine_endpoint_gate),
-                    endpoint_window=float(args.boundary_refine_endpoint_window),
-                    endpoint_margin=float(args.boundary_refine_endpoint_margin),
+                    embedding_fn=reference_embedding_fn,
+                    min_segment_duration=float(args.resegmentation_reference_min_segment),
+                    max_segments_per_speaker=int(args.resegmentation_reference_max_segments),
+                )
+                local_activity_provider = _build_local_activity_provider(
+                    audio_info=audio,
+                    run_dir=run_dir,
+                    local_pipeline=local_resegmentation_pipeline,
+                    speaker_embedder=speaker_embedder,
+                    min_duration=float(args.resegmentation_min_duration),
                     logger=logger,
                 )
-            boundary_refinement_report = write_boundary_refinement_report(
-                run_dir,
-                boundary_refinements,
-                boundary_refine_parameters,
-            )
+                speakerdia, resegmentation_report = apply_resegmentation_audit(
+                    speakerdia,
+                    references=references,
+                    local_activity_provider=local_activity_provider,
+                    config=audit_config,
+                )
+                resegmentation_report.setdefault("metadata", {})["reference_report"] = reference_report
+                resegmentation_report_path = write_resegmentation_report(run_dir, resegmentation_report)
+                logger.info(
+                    "Speaker resegmentation audit adjusted "
+                    f"{resegmentation_report.get('metadata', {}).get('adjustment_count', 0)} regions."
+                )
 
         segment_list = split_long_segments(df_to_list(speakerdia))
         dia_end = time.time()
@@ -412,20 +520,11 @@ def process_audio(
                 "audio_duration_seconds": audio_duration,
                 "sample_rate": audio["sample_rate"],
                 "audio_gain_clamp_db": float(args.audio_gain_clamp_db),
-                "speaker_boundary_refinement_enabled": bool(args.speaker_boundary_refinement),
-                "speaker_boundary_refinement_count": len(boundary_refinements),
-                "speaker_boundary_refinement_report": str(boundary_refinement_report) if boundary_refinement_report else None,
-                "boundary_refine_max_shift": float(args.boundary_refine_max_shift),
-                "boundary_refine_step": float(args.boundary_refine_step),
-                "boundary_refine_embed_window": float(args.boundary_refine_embed_window),
-                "boundary_refine_reference_min_segment": float(args.boundary_refine_reference_min_segment),
-                "boundary_refine_nested_max_segment": float(args.boundary_refine_nested_max_segment),
-                "boundary_refine_min_segment": float(args.boundary_refine_min_segment),
-                "boundary_refine_max_gap": float(args.boundary_refine_max_gap),
-                "boundary_refine_min_improvement": float(args.boundary_refine_min_improvement),
-                "boundary_refine_endpoint_gate": bool(args.boundary_refine_endpoint_gate),
-                "boundary_refine_endpoint_window": float(args.boundary_refine_endpoint_window),
-                "boundary_refine_endpoint_margin": float(args.boundary_refine_endpoint_margin),
+                "speaker_resegmentation_audit_enabled": bool(args.speaker_resegmentation_audit),
+                "speaker_resegmentation_audit_count": int(
+                    resegmentation_report.get("metadata", {}).get("adjustment_count", 0)
+                ),
+                "speaker_resegmentation_audit_report": str(resegmentation_report_path) if resegmentation_report_path else None,
                 "processing_time_seconds": dia_end - dia_start,
                 "rt_factor": rt,
                 "speaker_link_threshold": float(args.speaker_link_threshold),
@@ -472,18 +571,18 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--vad", action=argparse.BooleanOptionalAction, default=True, help="Use Silero VAD to help pre-diarization chunk splitting.")
     parser.add_argument("--audio-gain-clamp-db", type=float, default=6.0, help="Maximum absolute gain in dB applied during input audio normalization.")
-    parser.add_argument("--speaker-boundary-refinement", action=argparse.BooleanOptionalAction, default=False, help="Use speaker embeddings to refine close speaker-change boundaries after diarization.")
-    parser.add_argument("--boundary-refine-max-shift", type=float, default=0.4, help="Maximum seconds a speaker boundary may move during refinement.")
-    parser.add_argument("--boundary-refine-step", type=float, default=0.05, help="Seconds between candidate boundary positions during refinement.")
-    parser.add_argument("--boundary-refine-embed-window", type=float, default=0.4, help="Seconds of audio on each side of a candidate boundary for embedding scoring.")
-    parser.add_argument("--boundary-refine-reference-min-segment", type=float, default=2.0, help="Minimum segment duration used when building speaker reference embeddings.")
-    parser.add_argument("--boundary-refine-nested-max-segment", type=float, default=1.0, help="Maximum duration of a nested short segment eligible for boundary trimming.")
-    parser.add_argument("--boundary-refine-min-segment", type=float, default=0.3, help="Minimum segment duration preserved after boundary refinement.")
-    parser.add_argument("--boundary-refine-max-gap", type=float, default=0.35, help="Only refine adjacent speaker turns whose gap or overlap is within this many seconds.")
-    parser.add_argument("--boundary-refine-min-improvement", type=float, default=0.05, help="Minimum embedding-score improvement required to accept a boundary shift.")
-    parser.add_argument("--boundary-refine-endpoint-gate", action=argparse.BooleanOptionalAction, default=True, help="Before adjacent boundary search, keep boundaries whose left tail and right head already match their assigned speakers.")
-    parser.add_argument("--boundary-refine-endpoint-window", type=float, default=0.4, help="Seconds from each segment head/tail used by endpoint gate speaker checks.")
-    parser.add_argument("--boundary-refine-endpoint-margin", type=float, default=0.05, help="Minimum current-vs-neighbor speaker embedding margin required for endpoint gate confirmation.")
+    parser.add_argument("--speaker-resegmentation-audit", action=argparse.BooleanOptionalAction, default=False, help="Run conservative local speaker resegmentation audit after SortFormer diarization.")
+    parser.add_argument("--resegmentation-pyannote-model-name", type=str, default="pyannote/speaker-diarization-3.1", help="Local pyannote pipeline used to produce candidate activity streams for resegmentation audit.")
+    parser.add_argument("--resegmentation-boundary-window", type=float, default=1.5, help="Seconds around adjacent speaker boundaries audited by local pyannote activity.")
+    parser.add_argument("--resegmentation-interior-min-duration", type=float, default=8.0, help="Minimum segment duration that triggers interior audit for swallowed speaker turns.")
+    parser.add_argument("--resegmentation-max-shift", type=float, default=0.8, help="Maximum seconds an audited boundary may shift.")
+    parser.add_argument("--resegmentation-max-extend", type=float, default=0.8, help="Maximum seconds a segment may extend to mark a local overlap.")
+    parser.add_argument("--resegmentation-min-duration", type=float, default=0.3, help="Minimum segment/local activity duration preserved by resegmentation audit.")
+    parser.add_argument("--resegmentation-min-overlap-duration", type=float, default=0.2, help="Minimum local A+B overlap duration required to mark overlap.")
+    parser.add_argument("--resegmentation-min-mapping-score", type=float, default=0.7, help="Minimum top-1 embedding similarity for local-to-global speaker mapping.")
+    parser.add_argument("--resegmentation-min-mapping-margin", type=float, default=0.08, help="Minimum top-1/top-2 margin for local-to-global speaker mapping.")
+    parser.add_argument("--resegmentation-reference-min-segment", type=float, default=2.0, help="Minimum clean global speaker segment duration used for reference embeddings.")
+    parser.add_argument("--resegmentation-reference-max-segments", type=int, default=6, help="Maximum clean global speaker reference segments per speaker.")
     parser.add_argument("--speaker-link-threshold", type=float, default=0.75, help="Cosine similarity threshold for linking speakers across chunks.")
     parser.add_argument("--diar_device_index", type=int, default=0, help="CUDA device index for VAD and speaker embedding. Use -1 for CPU.")
     parser.add_argument("--sortformer_device_index", type=int, default=0, help="CUDA device index for Sortformer. Use -1 for CPU.")
@@ -547,6 +646,8 @@ def main() -> None:
     except Exception as exc:
         logger.warning(f"Failed to load speaker embedding model; continuing without cross-chunk speaker linking: {exc}")
 
+    local_resegmentation_pipeline = _load_local_resegmentation_pipeline(args, cfg, diar_device, logger)
+
     diar_model = SortformerEncLabelModel.from_pretrained(args.sortformer_model_name)
     diar_model = diar_model.to(sortformer_device)
     diar_model.eval()
@@ -559,7 +660,20 @@ def main() -> None:
 
     output_runs = []
     for audio_path in audio_paths:
-        output_runs.append(str(process_audio(audio_path, args, cfg, logger, vad_model, diar_model, speaker_embedder)))
+        output_runs.append(
+            str(
+                process_audio(
+                    audio_path,
+                    args,
+                    cfg,
+                    logger,
+                    vad_model,
+                    diar_model,
+                    speaker_embedder,
+                    local_resegmentation_pipeline,
+                )
+            )
+        )
 
     logger.info("Finished diarization-only stage")
     for run_dir in output_runs:
