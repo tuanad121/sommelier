@@ -1,0 +1,320 @@
+{
+  "metadata": {
+    "enabled": true,
+    "config": {
+      "enabled": true,
+      "boundary_window": 1.5,
+      "interior_min_duration": 1.0,
+      "max_shift": 0.8,
+      "max_extend": 0.8,
+      "min_duration": 0.3,
+      "min_overlap_duration": 0.2,
+      "min_mapping_score": 0.4,
+      "min_mapping_margin": 0.08
+    },
+    "candidate_count": 8,
+    "adjustment_count": 0,
+    "reference_report": {
+      "SPEAKER_00": {
+        "segment_count": 2,
+        "segments": [
+          {
+            "start": 0.0,
+            "end": 17.85
+          },
+          {
+            "start": 31.02,
+            "end": 33.06
+          }
+        ]
+      },
+      "SPEAKER_01": {
+        "segment_count": 2,
+        "segments": [
+          {
+            "start": 32.94,
+            "end": 69.76
+          },
+          {
+            "start": 17.67,
+            "end": 32.01
+          }
+        ]
+      }
+    },
+    "stage": "speaker_resegmentation_audit"
+  },
+  "adjustments": [],
+  "skipped_regions": [
+    {
+      "reason": "no_local_activity",
+      "region": {
+        "kind": "boundary",
+        "start": 8.86,
+        "end": 3.38,
+        "left_index": 0,
+        "right_index": 1,
+        "segment_index": null,
+        "reason": "speaker_boundary"
+      }
+    },
+    {
+      "reason": "uncertain_local_mapping",
+      "region": {
+        "kind": "boundary",
+        "start": 31.5,
+        "end": 34.5,
+        "left_index": 3,
+        "right_index": 4,
+        "segment_index": null,
+        "reason": "speaker_boundary"
+      },
+      "local_activity": [
+        {
+          "local_speaker": "SPEAKER_00",
+          "global_speaker": null,
+          "start": 31.531,
+          "end": 34.4,
+          "score": 0.565603,
+          "margin": 0.005487,
+          "top2_speaker": "SPEAKER_01",
+          "confidence": "uncertain"
+        }
+      ]
+    },
+    {
+      "reason": "no_local_activity",
+      "region": {
+        "kind": "boundary",
+        "start": 58.455,
+        "end": 50.65,
+        "left_index": 4,
+        "right_index": 5,
+        "segment_index": null,
+        "reason": "speaker_boundary"
+      }
+    },
+    {
+      "reason": "uncertain_local_mapping",
+      "region": {
+        "kind": "interior",
+        "start": 0.0,
+        "end": 17.85,
+        "left_index": null,
+        "right_index": null,
+        "segment_index": 0,
+        "reason": "long_segment"
+      },
+      "local_activity": [
+        {
+          "local_speaker": "SPEAKER_00",
+          "global_speaker": "SPEAKER_00",
+          "start": 0.031,
+          "end": 2.748,
+          "score": 0.623744,
+          "margin": 0.373215,
+          "top2_speaker": "SPEAKER_01",
+          "confidence": "high"
+        },
+        {
+          "local_speaker": "SPEAKER_01",
+          "global_speaker": null,
+          "start": 2.798,
+          "end": 3.22,
+          "score": 0.175959,
+          "margin": 0.06821,
+          "top2_speaker": "SPEAKER_00",
+          "confidence": "uncertain"
+        },
+        {
+          "local_speaker": "SPEAKER_00",
+          "global_speaker": "SPEAKER_00",
+          "start": 3.22,
+          "end": 6.73,
+          "score": 0.713151,
+          "margin": 0.431162,
+          "top2_speaker": "SPEAKER_01",
+          "confidence": "high"
+        },
+        {
+          "local_speaker": "SPEAKER_00",
+          "global_speaker": "SPEAKER_00",
+          "start": 6.848,
+          "end": 17.969,
+          "score": 0.833719,
+          "margin": 0.439978,
+          "top2_speaker": "SPEAKER_01",
+          "confidence": "high"
+        }
+      ]
+    },
+    {
+      "reason": "uncertain_local_mapping",
+      "region": {
+        "kind": "interior",
+        "start": 17.67,
+        "end": 32.01,
+        "left_index": null,
+        "right_index": null,
+        "segment_index": 2,
+        "reason": "long_segment"
+      },
+      "local_activity": [
+        {
+          "local_speaker": "SPEAKER_01",
+          "global_speaker": "SPEAKER_01",
+          "start": 17.701,
+          "end": 18.848,
+          "score": 0.444457,
+          "margin": 0.23463,
+          "top2_speaker": "SPEAKER_00",
+          "confidence": "high"
+        },
+        {
+          "local_speaker": "SPEAKER_01",
+          "global_speaker": "SPEAKER_01",
+          "start": 19.304,
+          "end": 26.105,
+          "score": 0.88775,
+          "margin": 0.538897,
+          "top2_speaker": "SPEAKER_00",
+          "confidence": "high"
+        },
+        {
+          "local_speaker": "SPEAKER_01",
+          "global_speaker": "SPEAKER_01",
+          "start": 26.813,
+          "end": 30.83,
+          "score": 0.797791,
+          "margin": 0.475436,
+          "top2_speaker": "SPEAKER_00",
+          "confidence": "high"
+        },
+        {
+          "local_speaker": "SPEAKER_00",
+          "global_speaker": "SPEAKER_00",
+          "start": 30.914,
+          "end": 31.724,
+          "score": 0.417249,
+          "margin": 0.277253,
+          "top2_speaker": "SPEAKER_01",
+          "confidence": "high"
+        },
+        {
+          "local_speaker": "SPEAKER_01",
+          "global_speaker": null,
+          "start": 31.673,
+          "end": 31.977,
+          "score": null,
+          "margin": null,
+          "top2_speaker": "SPEAKER_01",
+          "confidence": "uncertain"
+        }
+      ]
+    },
+    {
+      "reason": "uncertain_local_mapping",
+      "region": {
+        "kind": "interior",
+        "start": 32.94,
+        "end": 69.76,
+        "left_index": null,
+        "right_index": null,
+        "segment_index": 4,
+        "reason": "long_segment"
+      },
+      "local_activity": [
+        {
+          "local_speaker": "SPEAKER_01",
+          "global_speaker": "SPEAKER_01",
+          "start": 32.971,
+          "end": 38.219,
+          "score": 0.778381,
+          "margin": 0.525287,
+          "top2_speaker": "SPEAKER_00",
+          "confidence": "high"
+        },
+        {
+          "local_speaker": "SPEAKER_01",
+          "global_speaker": "SPEAKER_01",
+          "start": 38.523,
+          "end": 43.433,
+          "score": 0.787198,
+          "margin": 0.482857,
+          "top2_speaker": "SPEAKER_00",
+          "confidence": "high"
+        },
+        {
+          "local_speaker": "SPEAKER_00",
+          "global_speaker": null,
+          "start": 43.568,
+          "end": 44.041,
+          "score": 0.105882,
+          "margin": 0.116497,
+          "top2_speaker": "SPEAKER_01",
+          "confidence": "uncertain"
+        },
+        {
+          "local_speaker": "SPEAKER_01",
+          "global_speaker": "SPEAKER_01",
+          "start": 44.007,
+          "end": 47.669,
+          "score": 0.75953,
+          "margin": 0.502345,
+          "top2_speaker": "SPEAKER_00",
+          "confidence": "high"
+        },
+        {
+          "local_speaker": "SPEAKER_02",
+          "global_speaker": null,
+          "start": 48.142,
+          "end": 48.58,
+          "score": 0.155442,
+          "margin": 0.015961,
+          "top2_speaker": "SPEAKER_00",
+          "confidence": "uncertain"
+        },
+        {
+          "local_speaker": "SPEAKER_01",
+          "global_speaker": "SPEAKER_01",
+          "start": 48.277,
+          "end": 59.482,
+          "score": 0.883957,
+          "margin": 0.58257,
+          "top2_speaker": "SPEAKER_00",
+          "confidence": "high"
+        },
+        {
+          "local_speaker": "SPEAKER_01",
+          "global_speaker": "SPEAKER_01",
+          "start": 59.617,
+          "end": 62.097,
+          "score": 0.724395,
+          "margin": 0.40406,
+          "top2_speaker": "SPEAKER_00",
+          "confidence": "high"
+        },
+        {
+          "local_speaker": "SPEAKER_01",
+          "global_speaker": "SPEAKER_01",
+          "start": 62.671,
+          "end": 68.678,
+          "score": 0.774018,
+          "margin": 0.412073,
+          "top2_speaker": "SPEAKER_00",
+          "confidence": "high"
+        },
+        {
+          "local_speaker": "SPEAKER_01",
+          "global_speaker": null,
+          "start": 69.252,
+          "end": 69.91,
+          "score": 0.009551,
+          "margin": 0.026409,
+          "top2_speaker": "SPEAKER_00",
+          "confidence": "uncertain"
+        }
+      ]
+    }
+  ]
+}

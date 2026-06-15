@@ -149,35 +149,47 @@ def find_audit_regions(df: pd.DataFrame, config: AuditConfig) -> list[AuditRegio
     ordered = df.sort_values("start").reset_index(drop=True)
     regions: list[AuditRegion] = []
 
-    for idx in range(len(ordered) - 1):
-        left = ordered.loc[idx]
-        right = ordered.loc[idx + 1]
-        if str(left["speaker"]) == str(right["speaker"]):
-            continue
-        left_end = float(left["end"])
-        right_start = float(right["start"])
-        center = (left_end + right_start) / 2.0
-        regions.append(
-            AuditRegion(
-                kind="boundary",
-                start=max(float(left["start"]), center - float(config.boundary_window)),
-                end=min(float(right["end"]), center + float(config.boundary_window)),
-                left_index=idx,
-                right_index=idx + 1,
-                reason="speaker_boundary",
-            )
-        )
-
     for idx, row in ordered.iterrows():
-        duration = float(row["end"]) - float(row["start"])
+        start = float(row["start"])
+        end = float(row["end"])
+        duration = end - start
+
         if duration >= float(config.interior_min_duration):
             regions.append(
                 AuditRegion(
                     kind="interior",
-                    start=float(row["start"]),
-                    end=float(row["end"]),
+                    start=start,
+                    end=end,
                     segment_index=int(idx),
                     reason="long_segment",
+                )
+            )
+            regions.append(
+                AuditRegion(
+                    kind="onset",
+                    start=max(0.0, start - float(config.boundary_window)),
+                    end=start + float(config.boundary_window),
+                    segment_index=int(idx),
+                    reason="onset_tuning",
+                )
+            )
+            regions.append(
+                AuditRegion(
+                    kind="offset",
+                    start=max(0.0, end - float(config.boundary_window)),
+                    end=end + float(config.boundary_window),
+                    segment_index=int(idx),
+                    reason="offset_tuning",
+                )
+            )
+        else:
+            regions.append(
+                AuditRegion(
+                    kind="short_segment",
+                    start=max(0.0, start - float(config.boundary_window)),
+                    end=end + float(config.boundary_window),
+                    segment_index=int(idx),
+                    reason="short_segment_tuning",
                 )
             )
 
@@ -327,86 +339,74 @@ def _drop_tiny_segments(df: pd.DataFrame, min_duration: float) -> pd.DataFrame:
     return df.loc[keep].copy()
 
 
-def _apply_boundary_region(
+def _apply_boundary_tuning(
     refined: pd.DataFrame,
     region: AuditRegion,
     mapped: list[MappedActivity],
     config: AuditConfig,
 ) -> tuple[pd.DataFrame, dict[str, Any] | None]:
-    if region.left_index is None or region.right_index is None:
+    if region.segment_index is None:
         return refined, None
 
-    left_idx = int(region.left_index)
-    right_idx = int(region.right_index)
-    if left_idx >= len(refined) or right_idx >= len(refined):
+    seg_idx = int(region.segment_index)
+    if seg_idx >= len(refined):
         return refined, None
 
-    left_speaker = str(refined.loc[left_idx, "speaker"])
-    right_speaker = str(refined.loc[right_idx, "speaker"])
-    left_span = _speaker_span(mapped, left_speaker)
-    right_span = _speaker_span(mapped, right_speaker)
-    if left_span is None or right_span is None:
+    original = refined.loc[seg_idx]
+    speaker = str(original["speaker"])
+    old_start = float(original["start"])
+    old_end = float(original["end"])
+
+    usable = [item for item in mapped if item.global_speaker == speaker]
+    if not usable:
         return refined, None
 
-    old_left_end = float(refined.loc[left_idx, "end"])
-    old_right_start = float(refined.loc[right_idx, "start"])
-    old_boundary = (old_left_end + old_right_start) / 2.0
-    left_start, left_end = left_span
-    right_start, right_end = right_span
+    overlapping = []
+    for item in usable:
+        if float(item.end) >= old_start - float(config.max_extend) and float(item.start) <= old_end + float(config.max_extend):
+            overlapping.append(item)
 
-    overlap_start = max(left_start, right_start)
-    overlap_end = min(left_end, right_end)
-    overlap_duration = overlap_end - overlap_start
-    can_extend_left = 0.0 <= left_end - old_left_end <= float(config.max_extend)
-    can_extend_right = 0.0 <= old_right_start - right_start <= float(config.max_extend)
-    if (
-        overlap_duration >= float(config.min_overlap_duration)
-        and left_end > old_left_end
-        and right_start < old_right_start
-        and can_extend_left
-        and can_extend_right
-    ):
-        updated = refined.copy()
-        updated.loc[left_idx, "end"] = round(float(left_end), 3)
-        updated.loc[right_idx, "start"] = round(float(right_start), 3)
-        return updated, {
-            "action": "mark_overlap",
-            "region": _region_payload(region),
-            "left_index": left_idx,
-            "right_index": right_idx,
-            "speakers": [left_speaker, right_speaker],
-            "old_left_end": round(old_left_end, 3),
-            "old_right_start": round(old_right_start, 3),
-            "new_left_end": round(float(left_end), 3),
-            "new_right_start": round(float(right_start), 3),
-            "overlap_start": round(float(overlap_start), 3),
-            "overlap_end": round(float(overlap_end), 3),
-            "confidence": "high",
-        }
+    if not overlapping:
+        return refined, None
 
-    new_boundary = round(float((left_end + right_start) / 2.0), 3)
-    if abs(new_boundary - old_boundary) > float(config.max_shift):
+    new_start = old_start
+    new_end = old_end
+
+    if region.kind in ("onset", "short_segment"):
+        candidate_start = min(float(item.start) for item in overlapping)
+        if old_start - candidate_start > float(config.max_extend):
+            candidate_start = old_start - float(config.max_extend)
+        elif candidate_start - old_start > float(config.max_shift):
+            candidate_start = old_start + float(config.max_shift)
+        new_start = round(candidate_start, 3)
+
+    if region.kind in ("offset", "short_segment"):
+        candidate_end = max(float(item.end) for item in overlapping)
+        if candidate_end - old_end > float(config.max_extend):
+            candidate_end = old_end + float(config.max_extend)
+        elif old_end - candidate_end > float(config.max_shift):
+            candidate_end = old_end - float(config.max_shift)
+        new_end = round(candidate_end, 3)
+
+    if new_start == old_start and new_end == old_end:
         return refined, None
-    if new_boundary - float(refined.loc[left_idx, "start"]) < float(config.min_duration):
-        return refined, None
-    if float(refined.loc[right_idx, "end"]) - new_boundary < float(config.min_duration):
-        return refined, None
-    if abs(new_boundary - old_boundary) < 0.001:
+
+    if new_end - new_start < float(config.min_duration):
         return refined, None
 
     updated = refined.copy()
-    updated.loc[left_idx, "end"] = new_boundary
-    updated.loc[right_idx, "start"] = new_boundary
+    updated.loc[seg_idx, "start"] = new_start
+    updated.loc[seg_idx, "end"] = new_end
+
     return updated, {
-        "action": "shift",
+        "action": "trim_boundary",
         "region": _region_payload(region),
-        "left_index": left_idx,
-        "right_index": right_idx,
-        "left_speaker": left_speaker,
-        "right_speaker": right_speaker,
-        "old_boundary": round(float(old_boundary), 3),
-        "new_boundary": new_boundary,
-        "shift_seconds": round(float(new_boundary - old_boundary), 3),
+        "segment_index": seg_idx,
+        "speaker": speaker,
+        "old_start": round(old_start, 3),
+        "old_end": round(old_end, 3),
+        "new_start": new_start,
+        "new_end": new_end,
         "confidence": "high",
     }
 
@@ -440,8 +440,8 @@ def _apply_interior_region(
     for item in usable:
         row = original.to_dict()
         row["speaker"] = str(item.global_speaker)
-        row["start"] = max(float(original["start"]), float(item.start))
-        row["end"] = min(float(original["end"]), float(item.end))
+        row["start"] = max(float(original["start"]) - float(config.max_extend), float(item.start))
+        row["end"] = min(float(original["end"]) + float(config.max_extend), float(item.end))
         if row["end"] - row["start"] >= float(config.min_duration):
             new_rows.append(row)
 
@@ -496,6 +496,8 @@ def apply_resegmentation_audit(
         return refined, report
 
     regions = find_audit_regions(refined, config)
+    # Sort regions by segment_index descending to avoid index shifting bugs when interior splits add rows
+    regions.sort(key=lambda r: (r.segment_index or 0), reverse=True)
     report["metadata"]["candidate_count"] = len(regions)
 
     for region in regions:
@@ -517,8 +519,8 @@ def apply_resegmentation_audit(
             )
             continue
 
-        if region.kind == "boundary":
-            refined, adjustment = _apply_boundary_region(refined, region, mapped, config)
+        if region.kind in ("onset", "offset", "short_segment"):
+            refined, adjustment = _apply_boundary_tuning(refined, region, mapped, config)
         elif region.kind == "interior":
             refined, adjustment = _apply_interior_region(refined, region, mapped, config)
         else:
