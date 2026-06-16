@@ -101,25 +101,22 @@ def main() -> None:
             TORCHAUDIO_PACKAGE = "torchaudio==2.7.1"
             TORCHVISION_PACKAGE = "torchvision==0.22.1"
             PYTORCH_WHEEL_EXTRA_INDEX_URL = "https://download.pytorch.org/whl/cu126"
-            NUMPY_PACKAGE = "numpy==2.2.6"
+            NUMPY_PACKAGE = "numpy==1.26.4"
             NUMBA_PACKAGE = "numba==0.61.2"
             LLVMLITE_PACKAGE = "llvmlite==0.44.0"
 
             STAGE23_PACKAGES = [
                 "pydub==0.25.1",
-                "librosa==0.11.0",
-                "soundfile==0.13.1",
+                "numpy==1.26.4",
+                "librosa==0.10.2.post1",
+                "soundfile==0.12.1",
                 "pandas==2.3.1",
                 "huggingface-hub==0.33.4",
                 "PyYAML==6.0.2",
-                "lightning==2.4.0",
-                "pytorch-lightning==2.5.2",
-                "torchmetrics==1.7.4",
-                "pyannote.audio==3.3.2",
                 "demucs==4.0.1",
                 "panns-inference",
                 "transformers",
-                "clearvoice",
+                "clearvoice==0.1.2",
                 "modelscope",
             ]
 
