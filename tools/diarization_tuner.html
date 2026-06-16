@@ -1611,11 +1611,11 @@ SORTFORMER_PP_MIN_DURATION_OFF = ${p.minOff}`;
     // ═══════════════════════════════════════════════════════════
     function fmtTime(sec) {
       const m = Math.floor(sec / 60);
-      const s = (sec % 60).toFixed(1);
-      return `${String(m).padStart(2, '0')}:${s.padStart(4, '0')}`;
+      const s = (sec % 60).toFixed(2);
+      return `${String(m).padStart(2, '0')}:${s.padStart(5, '0')}`;
     }
     function fmtTimeSec(sec) {
-      if (sec < 60) return sec.toFixed(1) + 's';
+      if (sec < 60) return sec.toFixed(2) + 's';
       const m = Math.floor(sec / 60);
       const s = Math.floor(sec % 60);
       return `${m}:${String(s).padStart(2, '0')}`;

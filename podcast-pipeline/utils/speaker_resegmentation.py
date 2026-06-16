@@ -25,6 +25,19 @@ class AuditConfig:
 
 
 @dataclass(frozen=True)
+class SlidingWindowAuditConfig:
+    enabled: bool = True
+    window_size: float = 0.2
+    step_size: float = 0.1
+    threshold_high: float = 0.75
+    threshold_low: float = 0.55
+    max_shift: float = 0.8
+    max_extend: float = 0.8
+    min_duration: float = 0.3
+    snap_tolerance: float = 0.05
+
+
+@dataclass(frozen=True)
 class LocalActivity:
     local_speaker: str
     start: float

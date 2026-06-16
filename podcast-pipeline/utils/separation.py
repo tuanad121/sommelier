@@ -170,7 +170,86 @@ class SepReformerSeparator:
             logger.error(f"SepReformer separation failed: {e}")
             import traceback
             logger.error(f"Traceback: {traceback.format_exc()}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return audio_segment, audio_segment
+
+
+class ClearVoiceTSESeparator:
+    """
+    Wrapper for ModelScope ClearerVoice (MossFormer2) Target Speaker Extraction.
+    """
+    def __init__(self, model_name='damo/speech_mossformer2_tse_16k', device="cuda"):
+        from clearvoice import ClearVoice
+        import os
+        
+        self.device = device
+        self.is_tse = True # Flag to indicate this is a Target Speaker Extraction model
+        
+        # ModelScope requires some ENV vars to use custom cache dirs if needed, but defaults are usually fine
+        print(f"[ClearVoice] Initializing Target Speaker Extraction model on {device}: {model_name}")
+        
+        # In Kaggle/Linux, the clearvoice pipeline uses 'task' and 'model_names'
+        try:
+            self.myClearVoice = ClearVoice(task='target_speaker_extraction', model_names=[model_name])
+            print("[ClearVoice] Model initialization complete!")
+        except Exception as e:
+            logger.error(f"Failed to initialize ClearVoice TSE: {e}")
+            raise e
+
+    def separate_target(self, mixed_audio, reference_audio, sample_rate):
+        """
+        Perform Target Speaker Extraction.
+        """
+        import tempfile
+        import soundfile as sf
+        import librosa
+        
+        try:
+            target_sr = 16000
+            if sample_rate != target_sr:
+                mixed_16k = librosa.resample(mixed_audio, orig_sr=sample_rate, target_sr=target_sr)
+                ref_16k = librosa.resample(reference_audio, orig_sr=sample_rate, target_sr=target_sr)
+            else:
+                mixed_16k = mixed_audio
+                ref_16k = reference_audio
+
+            # Write to temp files since clearvoice pipeline expects paths
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as f_mix, \
+                 tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as f_ref, \
+                 tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as f_out:
+                mix_path = f_mix.name
+                ref_path = f_ref.name
+                out_path = f_out.name
+                
+            try:
+                sf.write(mix_path, mixed_16k, target_sr)
+                sf.write(ref_path, ref_16k, target_sr)
+                
+                # Run MossFormer2 TSE
+                output_wav_dict = self.myClearVoice(input_path=mix_path, online_write=False, reference_path=ref_path)
+                
+                # output_wav_dict is usually a dict { 'mixture_name': audio_array }
+                # But myClearVoice.write handles it
+                self.myClearVoice.write(output_wav_dict, output_path=out_path)
+                
+                # Read back
+                extracted_audio, _ = librosa.load(out_path, sr=sample_rate)
+                
+                # Length matching due to resample/saving
+                target_length = len(mixed_audio)
+                if len(extracted_audio) != target_length:
+                    extracted_audio = np.pad(extracted_audio, (0, max(0, target_length - len(extracted_audio))))[:target_length]
+                    
+                return extracted_audio
+            finally:
+                if os.path.exists(mix_path): os.remove(mix_path)
+                if os.path.exists(ref_path): os.remove(ref_path)
+                if os.path.exists(out_path): os.remove(out_path)
+
+        except Exception as e:
+            if logger:
+                logger.error(f"ClearVoice TSE separation failed: {e}")
+            return mixed_audio
 
 
 @time_logger
@@ -369,6 +448,7 @@ def process_overlapping_segments_with_separation(segment_list, audio, overlap_th
 
     # (Reference Embeddings extraction logic - kept as is)
     reference_embeddings = {}
+    reference_audios = {}
     all_speakers = list(set([seg['speaker'] for seg in segment_list]))
 
     # ... (Reference Embedding extraction - kept as is) ...
@@ -384,10 +464,15 @@ def process_overlapping_segments_with_separation(segment_list, audio, overlap_th
                     seg_audio_16k = librosa.resample(seg_audio, orig_sr=sample_rate, target_sr=16000)
                 else:
                     seg_audio_16k = seg_audio
-                seg_tensor = torch.tensor(seg_audio_16k, dtype=torch.float32).unsqueeze(0).to(device)
-                with torch.inference_mode():
-                    embedding = embedding_model(seg_tensor)
-                reference_embeddings[speaker] = embedding
+                
+                # STORE REFERENCE AUDIO FOR TSE
+                reference_audios[speaker] = seg_audio_16k
+                
+                if embedding_model is not None:
+                    seg_tensor = torch.tensor(seg_audio_16k, dtype=torch.float32).unsqueeze(0).to(device)
+                    with torch.inference_mode():
+                        embedding = embedding_model(seg_tensor)
+                    reference_embeddings[speaker] = embedding
                 break
 
     # 2. Process overlap pairs
@@ -405,66 +490,87 @@ def process_overlapping_segments_with_separation(segment_list, audio, overlap_th
         end_frame = int(overlap_end * sample_rate)
         overlap_audio = waveform[start_frame:end_frame]
 
-        # Separate with SepReformer
-        separated_src1, separated_src2 = separator.separate(
-            overlap_audio, sample_rate
-        )
-
-        # Identify speakers with embedding matching
-        speaker1_identity, similarity1 = identify_speaker_with_embedding(
-            separated_src1, sample_rate, reference_embeddings, [seg1_speaker, seg2_speaker], embedding_model, device
-        )
-        speaker2_identity, similarity2 = identify_speaker_with_embedding(
-            separated_src2, sample_rate, reference_embeddings, [seg1_speaker, seg2_speaker], embedding_model, device
-        )
-
-        # ---------------------------------------------------------------------
-        # [Stability improvement] Fallback handling when embedding matching fails
-        # ---------------------------------------------------------------------
-        assignment_method = "embedding"
-
-        # Case 1: Embedding matching succeeded and the two sources matched to different speakers
-        if (speaker1_identity is not None and speaker2_identity is not None and
-            speaker1_identity != speaker2_identity):
-            if speaker1_identity == seg1_speaker:
-                seg1_part = separated_src1
-                seg2_part = separated_src2
+        if getattr(separator, 'is_tse', False):
+            # TARGET SPEAKER EXTRACTION (ClearVoice)
+            ref_audio1 = reference_audios.get(seg1_speaker)
+            ref_audio2 = reference_audios.get(seg2_speaker)
+            
+            if ref_audio1 is None or ref_audio2 is None:
+                logger.warning(f"  Missing reference audio for {seg1_speaker} or {seg2_speaker}, skipping TSE.")
+                seg1_part = overlap_audio
+                seg2_part = overlap_audio
+                assignment_method = "skipped"
             else:
-                seg1_part = separated_src2
-                seg2_part = separated_src1
-            logger.info(f"  Speaker assignment by embedding: src1={speaker1_identity} ({similarity1:.3f}), src2={speaker2_identity} ({similarity2:.3f})")
-
-        # Case 2: Embedding matching failed or both sources matched to the same speaker -> energy-based fallback
+                logger.info(f"  Extracting {seg1_speaker} from mixture using TSE...")
+                seg1_part = separator.separate_target(overlap_audio, ref_audio1, sample_rate)
+                
+                logger.info(f"  Extracting {seg2_speaker} from mixture using TSE...")
+                seg2_part = separator.separate_target(overlap_audio, ref_audio2, sample_rate)
+                
+                assignment_method = "tse_direct"
+                speaker1_identity = seg1_speaker
+                speaker2_identity = seg2_speaker
         else:
-            assignment_method = "energy_fallback"
-            logger.warning(f"  Embedding matching failed or ambiguous (src1={speaker1_identity}, src2={speaker2_identity})")
-            logger.info(f"  Using energy-based fallback for speaker assignment")
+            # BLIND SOURCE SEPARATION (SepReformer)
+            separated_src1, separated_src2 = separator.separate(
+                overlap_audio, sample_rate
+            )
 
-            # Assign the higher-energy source to the longer segment based on segment duration
-            seg1_duration = seg1['end'] - seg1['start']
-            seg2_duration = seg2['end'] - seg2['start']
+            # Identify speakers with embedding matching
+            speaker1_identity, similarity1 = identify_speaker_with_embedding(
+                separated_src1, sample_rate, reference_embeddings, [seg1_speaker, seg2_speaker], embedding_model, device
+            )
+            speaker2_identity, similarity2 = identify_speaker_with_embedding(
+                separated_src2, sample_rate, reference_embeddings, [seg1_speaker, seg2_speaker], embedding_model, device
+            )
 
-            energy1 = calculate_energy(separated_src1)
-            energy2 = calculate_energy(separated_src2)
+            # ---------------------------------------------------------------------
+            # Fallback handling when embedding matching fails
+            # ---------------------------------------------------------------------
+            assignment_method = "embedding"
 
-            # Assign the higher-energy source to the longer segment
-            if seg1_duration >= seg2_duration:
-                if energy1 >= energy2:
+            # Case 1: Embedding matching succeeded and the two sources matched to different speakers
+            if (speaker1_identity is not None and speaker2_identity is not None and
+                speaker1_identity != speaker2_identity):
+                if speaker1_identity == seg1_speaker:
                     seg1_part = separated_src1
                     seg2_part = separated_src2
                 else:
                     seg1_part = separated_src2
                     seg2_part = separated_src1
+                logger.info(f"  Speaker assignment by embedding: src1={speaker1_identity} ({similarity1:.3f}), src2={speaker2_identity} ({similarity2:.3f})")
+
+            # Case 2: Embedding matching failed or both sources matched to the same speaker -> energy-based fallback
             else:
-                if energy2 >= energy1:
-                    seg1_part = separated_src2
-                    seg2_part = separated_src1
-                else:
-                    seg1_part = separated_src1
-                    seg2_part = separated_src2
+                assignment_method = "energy_fallback"
+                logger.warning(f"  Embedding matching failed or ambiguous (src1={speaker1_identity}, src2={speaker2_identity})")
+                logger.info(f"  Using energy-based fallback for speaker assignment")
 
-            logger.info(f"  Energy-based assignment: seg1_dur={seg1_duration:.2f}s, seg2_dur={seg2_duration:.2f}s, "
-                       f"energy1={energy1:.2e}, energy2={energy2:.2e}")
+                # Assign the higher-energy source to the longer segment based on segment duration
+                seg1_duration = seg1['end'] - seg1['start']
+                seg2_duration = seg2['end'] - seg2['start']
+
+                energy1 = calculate_energy(separated_src1)
+                energy2 = calculate_energy(separated_src2)
+
+                # Assign the higher-energy source to the longer segment
+                if seg1_duration >= seg2_duration:
+                    if energy1 >= energy2:
+                        seg1_part = separated_src1
+                        seg2_part = separated_src2
+                    else:
+                        seg1_part = separated_src2
+                        seg2_part = separated_src1
+                else:
+                    if energy2 >= energy1:
+                        seg1_part = separated_src2
+                        seg2_part = separated_src1
+                    else:
+                        seg1_part = separated_src1
+                        seg2_part = separated_src2
+
+                logger.info(f"  Energy-based assignment: seg1_dur={seg1_duration:.2f}s, seg2_dur={seg2_duration:.2f}s, "
+                           f"energy1={energy1:.2e}, energy2={energy2:.2e}")
         # ---------------------------------------------------------------------
 
         # ---------------------------------------------------------------------

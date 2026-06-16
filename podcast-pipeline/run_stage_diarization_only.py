@@ -33,8 +33,10 @@ from utils.diarization import (
 from utils.logger import Logger
 from utils.speaker_resegmentation import (
     AuditConfig,
+    SlidingWindowAuditConfig,
     LocalActivity,
     apply_resegmentation_audit,
+    apply_sliding_window_audit,
     build_global_references,
     write_resegmentation_report,
 )
@@ -497,12 +499,32 @@ def process_audio(
                     min_duration=float(args.resegmentation_min_duration),
                     logger=logger,
                 )
-                speakerdia, resegmentation_report = apply_resegmentation_audit(
-                    speakerdia,
-                    references=references,
-                    local_activity_provider=local_activity_provider,
-                    config=audit_config,
-                )
+                if args.speaker_resegmentation_method == "pyannote":
+                    speakerdia, resegmentation_report = apply_resegmentation_audit(
+                        speakerdia,
+                        references=references,
+                        local_activity_provider=local_activity_provider,
+                        config=audit_config,
+                    )
+                elif args.speaker_resegmentation_method == "sliding_window":
+                    sliding_config = SlidingWindowAuditConfig(
+                        enabled=True,
+                        window_size=args.sliding_window_size,
+                        step_size=args.sliding_step_size,
+                        threshold_high=args.sliding_threshold_high,
+                        threshold_low=args.sliding_threshold_low,
+                        max_shift=args.resegmentation_max_shift,
+                        max_extend=args.resegmentation_max_extend,
+                        min_duration=args.resegmentation_min_duration,
+                    )
+                    speakerdia, resegmentation_report = apply_sliding_window_audit(
+                        speakerdia,
+                        config=sliding_config,
+                        embedding_fn=lambda s, e: speaker_embedder.get_embedding(audio, s, e),
+                        min_segment_duration=float(args.resegmentation_reference_min_segment),
+                        max_segments_per_speaker=int(args.resegmentation_reference_max_segments),
+                    )
+
                 resegmentation_report.setdefault("metadata", {})["reference_report"] = reference_report
                 resegmentation_report_path = write_resegmentation_report(run_dir, resegmentation_report)
                 logger.info(
@@ -583,6 +605,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--resegmentation-min-mapping-margin", type=float, default=0.08, help="Minimum top-1/top-2 margin for local-to-global speaker mapping.")
     parser.add_argument("--resegmentation-reference-min-segment", type=float, default=2.0, help="Minimum clean global speaker segment duration used for reference embeddings.")
     parser.add_argument("--resegmentation-reference-max-segments", type=int, default=6, help="Maximum clean global speaker reference segments per speaker.")
+    parser.add_argument("--speaker-resegmentation-method", type=str, choices=["pyannote", "sliding_window"], default="pyannote", help="Method used for speaker resegmentation audit.")
+    parser.add_argument("--sliding-window-size", type=float, default=0.2, help="Window size in seconds for sliding window resegmentation.")
+    parser.add_argument("--sliding-step-size", type=float, default=0.1, help="Step size in seconds for sliding window resegmentation.")
+    parser.add_argument("--sliding-threshold-high", type=float, default=0.75, help="High similarity threshold for sliding window expansion.")
+    parser.add_argument("--sliding-threshold-low", type=float, default=0.55, help="Low similarity threshold for sliding window shrinkage.")
     parser.add_argument("--speaker-link-threshold", type=float, default=0.75, help="Cosine similarity threshold for linking speakers across chunks.")
     parser.add_argument("--diar_device_index", type=int, default=0, help="CUDA device index for VAD and speaker embedding. Use -1 for CPU.")
     parser.add_argument("--sortformer_device_index", type=int, default=0, help="CUDA device index for Sortformer. Use -1 for CPU.")

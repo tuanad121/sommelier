@@ -127,18 +127,13 @@ def _load_embedding_model(args, cfg: dict[str, Any], logger):
     return model.to(device)
 
 
-def _load_sepreformer_separator(args, logger):
-    from utils.separation import SepReformerSeparator
+def _load_tse_separator(args, logger):
+    from utils.separation import ClearVoiceTSESeparator
 
-    sepreformer_path = Path(args.sepreformer_path) if args.sepreformer_path else PROJECT_ROOT / "SepReformer"
-    if not sepreformer_path.exists():
-        raise FileNotFoundError(
-            f"SepReformer folder not found: {sepreformer_path}. "
-            "Run the notebook SepReformer clone/download cell first."
-        )
-    device = _torch_device_from_index(args.sepreformer_device_index)
-    logger.info(f"Loading SepReformer separator on {device}: {sepreformer_path}")
-    return SepReformerSeparator(sepreformer_path=str(sepreformer_path), device=device)
+    device = _device_name_from_index(args.clearvoice_device_index)
+    model_name = args.clearvoice_model_name
+    logger.info(f"Loading ClearVoice TSE separator on {device}: {model_name}")
+    return ClearVoiceTSESeparator(model_name=model_name, device=device)
 
 
 def process_stage_music_overlap(args) -> Path:
@@ -175,7 +170,7 @@ def process_stage_music_overlap(args) -> Path:
         "Device map: "
         f"panns={_device_name_from_index(args.panns_device_index)}, "
         f"demucs={_device_name_from_index(args.demucs_device_index)}, "
-        f"sepreformer={_device_name_from_index(args.sepreformer_device_index)}"
+        f"clearvoice={_device_name_from_index(args.clearvoice_device_index)}"
     )
 
     audio = standardization(str(audio_path), cfg)
@@ -214,28 +209,26 @@ def process_stage_music_overlap(args) -> Path:
 
     logger.info("Stage 03: Overlap separation")
     separation_start = time.time()
-    separator = _load_sepreformer_separator(args, logger) if args.sepreformer else None
-    embedding_model = _load_embedding_model(args, cfg, logger) if args.sepreformer else None
+    separator = _load_tse_separator(args, logger) if args.clearvoice_tse else None
     overlap_pairs = detect_overlapping_segments(segment_list, float(args.overlap_threshold))
-    if args.sepreformer and separator is not None and embedding_model is not None:
+    if args.clearvoice_tse and separator is not None:
         audio, segment_list = process_overlapping_segments_with_separation(
             segment_list,
             audio,
             overlap_threshold=float(args.overlap_threshold),
             separator=separator,
-            embedding_model=embedding_model,
-            device=_torch_device_from_index(args.sepreformer_device_index),
+            embedding_model=None, # Not needed for ClearVoice
+            device=_torch_device_from_index(args.clearvoice_device_index),
         )
     else:
-        logger.info("SepReformer overlap separation skipped")
+        logger.info("ClearVoice TSE overlap separation skipped")
     separation_time = time.time() - separation_start
     writer.write_overlap(
         segment_list,
         audio,
         metadata={
-            "enabled": bool(args.sepreformer),
+            "enabled": bool(args.clearvoice_tse),
             "separator_available": separator is not None,
-            "embedding_model_available": embedding_model is not None,
             "processing_time_seconds": separation_time,
             "rt_factor": separation_time / audio_duration if audio_duration > 0 else 0.0,
             "overlap_threshold_seconds": float(args.overlap_threshold),
@@ -260,15 +253,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output_run_dir", type=str, default="", help="Where to write 02_music_clean and 03_overlap. Defaults to input_run_dir.")
     parser.add_argument("--config_path", type=str, default="config.json", help="Pipeline config.json path.")
     parser.add_argument("--demucs", action=argparse.BooleanOptionalAction, default=True, help="Enable PANNs music detection and Demucs cleaning.")
-    parser.add_argument("--sepreformer", action=argparse.BooleanOptionalAction, default=True, help="Enable SepReformer overlap separation.")
-    parser.add_argument("--overlap_threshold", type=float, default=1.0, help="Minimum overlap seconds to run SepReformer on a pair.")
+    parser.add_argument("--clearvoice_tse", action=argparse.BooleanOptionalAction, default=True, help="Enable ClearVoice Target Speaker Extraction.")
+    parser.add_argument("--overlap_threshold", type=float, default=1.0, help="Minimum overlap seconds to run TSE on a pair.")
     parser.add_argument("--demucs_padding", type=float, default=0.5, help="Seconds of context around each segment for music detection/cleaning.")
     parser.add_argument("--demucs_model_name", type=str, default="htdemucs", help="Demucs model name.")
     parser.add_argument("--panns_data_dir", type=str, default="", help="Folder containing Cnn14_mAP=0.431.pth.")
-    parser.add_argument("--sepreformer_path", type=str, default="", help="SepReformer repo folder.")
+    parser.add_argument("--clearvoice_model_name", type=str, default="damo/speech_mossformer2_tse_16k", help="ClearVoice TSE model name on ModelScope.")
     parser.add_argument("--panns_device_index", type=int, default=0, help="Visible CUDA device index for PANNs. Use -1 for CPU.")
     parser.add_argument("--demucs_device_index", type=int, default=0, help="Visible CUDA device index for Demucs. Use -1 for CPU.")
-    parser.add_argument("--sepreformer_device_index", type=int, default=0, help="Visible CUDA device index for SepReformer/embedding. Use -1 for CPU.")
+    parser.add_argument("--clearvoice_device_index", type=int, default=0, help="Visible CUDA device index for ClearVoice. Use -1 for CPU.")
     return parser
 
 
