@@ -113,24 +113,18 @@ class StageDiarizationOnlyTests(unittest.TestCase):
             "--sortformer-pp-min-duration-off",
             "--sortformer_batch_size",
             "--sortformer_num_workers",
-            "--speaker-resegmentation-audit",
-            "--resegmentation-boundary-window",
-            "--resegmentation-interior-min-duration",
-            "--resegmentation-max-shift",
-            "--resegmentation-max-extend",
-            "--resegmentation-min-duration",
-            "--resegmentation-min-overlap-duration",
-            "--resegmentation-min-mapping-score",
-            "--resegmentation-min-mapping-margin",
         ]:
             self.assertIn(flag, text)
 
-        self.assertIn("apply_resegmentation_audit", text)
-        self.assertIn("apply_sliding_window_audit", text)
-        self.assertIn("SlidingWindowAuditConfig", text)
-        self.assertIn("write_resegmentation_report", text)
-        self.assertIn("speaker_resegmentation_audit_enabled", text)
-        self.assertIn("speaker_resegmentation_audit_report", text)
+        self.assertNotIn("speaker_resegmentation", text)
+        self.assertNotIn("resegmentation_", text)
+        self.assertNotIn("--resegmentation", text)
+        self.assertNotIn("--speaker-resegmentation", text)
+        self.assertNotIn("apply_resegmentation", text)
+        self.assertNotIn("apply_sliding_window_audit", text)
+        self.assertNotIn("SlidingWindowAuditConfig", text)
+        self.assertNotIn("LocalActivity", text)
+        self.assertNotIn("write_resegmentation_report", text)
         self.assertIn("postprocessing_yaml=sortformer_postprocessing_yaml", text)
         self.assertIn("num_workers=int(args.sortformer_num_workers)", text)
         self.assertIn("batch_size=int(args.sortformer_batch_size)", text)
@@ -146,17 +140,10 @@ class StageDiarizationOnlyTests(unittest.TestCase):
         self.assertIn('parser.add_argument("--sortformer-postprocessing", action=argparse.BooleanOptionalAction, default=True', text)
         self.assertIn('parser.add_argument("--sortformer-pp-onset", type=float, default=0.3', text)
         self.assertIn('parser.add_argument("--sortformer-pp-offset", type=float, default=0.33', text)
-        self.assertIn('parser.add_argument("--sortformer-pp-pad-onset", type=float, default=0.015', text)
-        self.assertIn('parser.add_argument("--sortformer-pp-pad-offset", type=float, default=0.015', text)
-        self.assertIn('parser.add_argument("--sortformer-pp-min-duration-on", type=float, default=0.35', text)
-        self.assertIn('parser.add_argument("--sortformer-pp-min-duration-off", type=float, default=0.35', text)
-        self.assertIn('choices=["pyannote", "sliding_window"]', text)
-        self.assertIn('parser.add_argument("--sliding-window-size"', text)
-        self.assertIn('parser.add_argument("--sliding-step-size"', text)
-        self.assertIn('parser.add_argument("--sliding-threshold-high"', text)
-        self.assertIn('parser.add_argument("--sliding-threshold-low"', text)
-        self.assertIn("embedding_fn=sliding_embedding_fn", text)
-        self.assertIn('args.speaker_resegmentation_method != "pyannote"', text)
+        self.assertIn('parser.add_argument("--sortformer-pp-pad-onset", type=float, default=0.02', text)
+        self.assertIn('parser.add_argument("--sortformer-pp-pad-offset", type=float, default=-0.08', text)
+        self.assertIn('parser.add_argument("--sortformer-pp-min-duration-on", type=float, default=0.28', text)
+        self.assertIn('parser.add_argument("--sortformer-pp-min-duration-off", type=float, default=0.4', text)
         self.assertNotIn("speaker_embedder.get_embedding", text)
 
     def test_apply_sortformer_streaming_config_sets_v21_cache_parameters(self):
@@ -218,6 +205,16 @@ class StageDiarizationOnlyTests(unittest.TestCase):
         self.assertIn('parser.add_argument("--sortformer-streaming-config", action=argparse.BooleanOptionalAction, default=True', text)
         self.assertIn('parser.add_argument("--sortformer_spkcache_len", type=int, default=200', text)
         self.assertIn('parser.add_argument("--max_dia_chunk_duration", type=float, default=900.0', text)
+
+    def test_speaker_linking_uses_quality_sorted_weighted_reference_candidates(self):
+        text = (PIPELINE_DIR / "run_stage_diarization_only.py").read_text(encoding="utf-8")
+
+        self.assertIn("select_speaker_reference_candidates", text)
+        self.assertIn("build_weighted_reference_embedding", text)
+        self.assertIn("from utils.speaker_linking import", text)
+        self.assertIn('"quality_weight"', text)
+        self.assertNotIn('rows.sort_values("start").iterrows()', text)
+        self.assertNotIn("utils.speaker_resegmentation", text)
 
 
 if __name__ == "__main__":
