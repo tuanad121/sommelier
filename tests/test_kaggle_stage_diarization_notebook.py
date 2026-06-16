@@ -70,7 +70,7 @@ class KaggleStageDiarizationNotebookTests(unittest.TestCase):
         self.assertIn("SORTFORMER_PP_ONSET = 0.3", joined)
         self.assertIn("SORTFORMER_PP_OFFSET = 0.33", joined)
         self.assertIn("SORTFORMER_PP_PAD_ONSET = 0.02", joined)
-        self.assertIn("SORTFORMER_PP_PAD_OFFSET = -0.08", joined)
+        self.assertIn("SORTFORMER_PP_PAD_OFFSET = -0.13", joined)
         self.assertIn("SORTFORMER_PP_MIN_DURATION_ON = 0.28", joined)
         self.assertIn("SORTFORMER_PP_MIN_DURATION_OFF = 0.4", joined)
         self.assertIn("SORTFORMER_BATCH_SIZE = 1", joined)
@@ -136,7 +136,7 @@ class KaggleStageDiarizationNotebookTests(unittest.TestCase):
         self.assertIn('"SORTFORMER_PP_ONSET": "0.3"', builder)
         self.assertIn('"SORTFORMER_PP_OFFSET": "0.33"', builder)
         self.assertIn('"SORTFORMER_PP_PAD_ONSET": "0.02"', builder)
-        self.assertIn('"SORTFORMER_PP_PAD_OFFSET": "-0.08"', builder)
+        self.assertIn('"SORTFORMER_PP_PAD_OFFSET": "-0.13"', builder)
         self.assertIn('"SORTFORMER_PP_MIN_DURATION_ON": "0.28"', builder)
         self.assertIn('"SORTFORMER_PP_MIN_DURATION_OFF": "0.4"', builder)
 

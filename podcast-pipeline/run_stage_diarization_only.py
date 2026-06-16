@@ -444,7 +444,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sortformer-pp-onset", type=float, default=0.3, help="NeMo postprocessing onset threshold for speech segment start.")
     parser.add_argument("--sortformer-pp-offset", type=float, default=0.33, help="NeMo postprocessing offset threshold for speech segment end.")
     parser.add_argument("--sortformer-pp-pad-onset", type=float, default=0.02, help="NeMo postprocessing seconds added before segment start.")
-    parser.add_argument("--sortformer-pp-pad-offset", type=float, default=-0.08, help="NeMo postprocessing seconds added after segment end.")
+    parser.add_argument("--sortformer-pp-pad-offset", type=float, default=-0.13, help="NeMo postprocessing seconds added after segment end.")
     parser.add_argument("--sortformer-pp-min-duration-on", type=float, default=0.28, help="NeMo postprocessing minimum speech segment duration.")
     parser.add_argument("--sortformer-pp-min-duration-off", type=float, default=0.4, help="NeMo postprocessing minimum non-speech duration before keeping a split.")
     parser.add_argument("--sortformer-param", dest="sortformer_param", action=argparse.BooleanOptionalAction, default=False, help="Enable post-hoc boundary padding for Sortformer output.")

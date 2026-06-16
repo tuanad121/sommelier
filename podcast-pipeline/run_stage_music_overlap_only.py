@@ -115,18 +115,6 @@ def _load_demucs_model(args, logger):
     return DemucsModel(model_name=args.demucs_model_name, device=device_name)
 
 
-def _load_embedding_model(args, cfg: dict[str, Any], logger):
-    from pyannote.audio import Model as PyannoteModel
-
-    token = cfg.get("huggingface_token", "")
-    if not str(token).startswith("hf"):
-        raise ValueError("huggingface_token missing or invalid in config.json; pyannote/embedding needs HF_TOKEN.")
-    device = _torch_device_from_index(args.sepreformer_device_index)
-    logger.info(f"Loading pyannote embedding model on {device}")
-    model = PyannoteModel.from_pretrained("pyannote/embedding", use_auth_token=token)
-    return model.to(device)
-
-
 def _load_tse_separator(args, logger):
     from utils.separation import ClearVoiceTSESeparator
 

@@ -35,7 +35,7 @@ def main() -> None:
 
             Notebook này dùng output từ stage 01 diarization đã chạy trước đó, rồi chỉ chạy:
             - Stage 02: phát hiện/loại background music bằng PANNs + Demucs.
-            - Stage 03: tách overlap bằng SepReformer.
+            - Stage 03: tách overlap bằng ClearVoice/MossFormer2 Target Speaker Extraction.
 
             Không chạy lại speaker diarization, không chạy ASR, không tạo HTML.
             """
@@ -44,9 +44,7 @@ def main() -> None:
             """
             ## 0. Cấu hình input stage 01
 
-            Nếu bạn vừa chạy notebook `07_stage_diarization_only.ipynb` trong cùng Kaggle session, chỉ cần sửa `AUDIO_INPUT_PATH` giống file audio đã chạy ở stage 01 và để `STAGE1_RUN_DIR = ""`.
-
-            Nếu bạn đã copy/download output stage 01 từ nơi khác, điền thẳng `STAGE1_RUN_DIR`.
+            Điền đường dẫn trực tiếp tới file `diarization.json` và file âm thanh gốc `full.wav` để chạy tiếp Stage 2 & 3.
             """
         ),
         code(
@@ -61,15 +59,10 @@ def main() -> None:
             FORCE_RECLONE = True
 
             # =========================
-            # 1. Stage 01 input controls
+            # 1. Stage 01 input files
             # =========================
-            # Phải trùng với audio đã chạy ở notebook stage 01 nếu STAGE1_RUN_DIR để trống.
-            AUDIO_INPUT_PATH = "/kaggle/input/YOUR_DATASET/YOUR_AUDIO.wav"
-            AUDIO_INPUT_EXTENSIONS = (".mp3", ".wav", ".m4a", ".flac", ".aac", ".ogg", ".opus")
-
-            # Để "" thì notebook tự dùng:
-            # /kaggle/working/sommelier_batch_outputs/diarization_only_runs/run_full_<AUDIO_STEM>
-            STAGE1_RUN_DIR = ""
+            DIARIZATION_JSON_PATH = "/kaggle/working/sommelier_batch_outputs/diarization_only_runs/run_full_YOUR_AUDIO/01_diarization/diarization.json"
+            AUDIO_WAV_PATH = "/kaggle/working/sommelier_batch_outputs/diarization_only_runs/run_full_YOUR_AUDIO/00_input/full.wav"
 
             # =========================
             # 2. Kaggle paths
@@ -90,7 +83,7 @@ def main() -> None:
             PRINT_NVIDIA_SMI = True
 
             RUN_DEMUCS = True
-            RUN_SEPREFORMER = True
+            RUN_CLEARVOICE_TSE = True
             OVERLAP_THRESHOLD = 1.0
             DEMUCS_PADDING = 0.5
             DEMUCS_MODEL_NAME = "htdemucs"
@@ -98,7 +91,7 @@ def main() -> None:
             # Kaggle 1x GPU: dùng 0. Dùng -1 để ép CPU.
             PANNS_DEVICE_INDEX = 0
             DEMUCS_DEVICE_INDEX = 0
-            SEPREFORMER_DEVICE_INDEX = 0
+            CLEARVOICE_DEVICE_INDEX = 0
 
             # =========================
             # 4. Pinned package versions
@@ -125,12 +118,9 @@ def main() -> None:
                 "pyannote.audio==3.3.2",
                 "demucs==4.0.1",
                 "panns-inference",
-            ]
-            SEPREFORMER_EXTRA_PACKAGES = [
-                "mir-eval==0.7",
-                "ptflops==0.7.4",
-                "thop==0.1.1.post2209072238",
-                "torchinfo==1.8.0",
+                "transformers",
+                "clearvoice",
+                "modelscope",
             ]
 
             # =========================
@@ -138,33 +128,36 @@ def main() -> None:
             # =========================
             HF_SECRET_NAME = "HF_TOKEN"
 
-            AUDIO_PATH = Path(AUDIO_INPUT_PATH)
-            if not AUDIO_INPUT_PATH or "YOUR_AUDIO" in AUDIO_INPUT_PATH:
-                raise FileNotFoundError(f"Hãy sửa AUDIO_INPUT_PATH thành đường dẫn audio đã chạy stage 01: {AUDIO_INPUT_PATH}")
-            if AUDIO_PATH.suffix.lower() not in AUDIO_INPUT_EXTENSIONS:
-                raise ValueError(f"Định dạng audio chưa hỗ trợ: {AUDIO_PATH.suffix}. Hỗ trợ: {AUDIO_INPUT_EXTENSIONS}")
+            DIARIZATION_JSON = Path(DIARIZATION_JSON_PATH)
+            FULL_AUDIO_PATH = Path(AUDIO_WAV_PATH)
+            if not DIARIZATION_JSON_PATH or "YOUR_AUDIO" in DIARIZATION_JSON_PATH:
+                raise FileNotFoundError(f"Hãy sửa DIARIZATION_JSON_PATH thành đường dẫn đúng: {DIARIZATION_JSON_PATH}")
+            if not AUDIO_WAV_PATH or "YOUR_AUDIO" in AUDIO_WAV_PATH:
+                raise FileNotFoundError(f"Hãy sửa AUDIO_WAV_PATH thành đường dẫn đúng: {AUDIO_WAV_PATH}")
 
-            RUN_DIR = Path(STAGE1_RUN_DIR) if STAGE1_RUN_DIR else OUTPUT_ROOT / f"run_full_{AUDIO_PATH.stem}"
-            DIARIZATION_JSON = RUN_DIR / "01_diarization" / "diarization.json"
-            FULL_AUDIO_PATH = RUN_DIR / "00_input" / "full.wav"
+            RUN_DIR = FULL_AUDIO_PATH.parents[1]
+            if DIARIZATION_JSON.parents[1] != RUN_DIR:
+                raise ValueError(
+                    "DIARIZATION_JSON_PATH và AUDIO_WAV_PATH phải thuộc cùng một run_full_* folder. "
+                    f"Got diarization run={DIARIZATION_JSON.parents[1]}, audio run={RUN_DIR}"
+                )
             MUSIC_JSON = RUN_DIR / "02_music_clean" / "segment_flags.json"
             CLEANED_AUDIO_PATH = RUN_DIR / "02_music_clean" / "cleaned_audio.wav"
             OVERLAP_JSON = RUN_DIR / "03_overlap" / "segments.json"
 
             print("REPO_URL =", REPO_URL)
             print("BRANCH =", BRANCH)
-            print("AUDIO_INPUT_PATH =", AUDIO_PATH)
             print("RUN_DIR =", RUN_DIR)
             print("DIARIZATION_JSON =", DIARIZATION_JSON)
             print("FULL_AUDIO_PATH =", FULL_AUDIO_PATH)
             print("RUN_DEMUCS =", RUN_DEMUCS)
-            print("RUN_SEPREFORMER =", RUN_SEPREFORMER)
+            print("RUN_CLEARVOICE_TSE =", RUN_CLEARVOICE_TSE)
             print("OVERLAP_THRESHOLD =", OVERLAP_THRESHOLD)
             print("Expected outputs: 02_music_clean/segment_flags.json, 02_music_clean/cleaned_audio.wav, 03_overlap/segments.json")
             print("Device indices:")
             print("  panns =", PANNS_DEVICE_INDEX)
             print("  demucs =", DEMUCS_DEVICE_INDEX)
-            print("  sepreformer =", SEPREFORMER_DEVICE_INDEX)
+            print("  clearvoice =", CLEARVOICE_DEVICE_INDEX)
             """
         ),
         md("## 1. Helper chạy lệnh và thiết lập GPU"),
@@ -354,7 +347,7 @@ def main() -> None:
                     name: idx for name, idx in {
                         "panns": PANNS_DEVICE_INDEX,
                         "demucs": DEMUCS_DEVICE_INDEX,
-                        "sepreformer": SEPREFORMER_DEVICE_INDEX,
+                        "clearvoice": CLEARVOICE_DEVICE_INDEX,
                     }.items()
                     if idx is not None and idx >= visible_gpu_count
                 }
@@ -395,7 +388,7 @@ def main() -> None:
             print("config.json updated:", CONFIG_PATH)
             """
         ),
-        md("## 6. Tải PANNs và SepReformer"),
+        md("## 6. Tải PANNs và chuẩn bị ClearVoice"),
         code(
             """
             import os
@@ -412,26 +405,10 @@ def main() -> None:
             else:
                 print("RUN_DEMUCS=False, bỏ qua tải PANNs")
 
-            if RUN_SEPREFORMER:
-                run_logged(["git", "lfs", "install"], "08_git_lfs_install.log", cwd=PROJECT_ROOT, tail=10)
-                os.chdir(PROJECT_ROOT)
-                if not Path("SepReformer").exists():
-                    run_logged(["git", "clone", "https://github.com/dmlguq456/SepReformer.git", "SepReformer"], "09_clone_sepreformer.log", cwd=PROJECT_ROOT, tail=20)
-                run_logged(["git", "lfs", "pull"], "10_sepreformer_lfs_pull.log", cwd=PROJECT_ROOT / "SepReformer", tail=20)
-                run_logged(["python", "-m", "pip", "install", "--no-deps", *SEPREFORMER_EXTRA_PACKAGES], "11_sepreformer_extra_deps.log", cwd=PROJECT_ROOT / "SepReformer", tail=12)
-
-                log = PROJECT_ROOT / "SepReformer" / "models" / "SepReformer_Base_WSJ0" / "log"
-                src = log / "scratch_weight"
-                dst = log / "scratch_weights"
-                if src.exists() and not dst.exists():
-                    os.symlink(src, dst)
-
-                ckpts = list(log.rglob("*.pt")) + list(log.rglob("*.pth"))
-                print("SepReformer checkpoints:", len(ckpts))
-                for p in ckpts[:10]:
-                    print(p)
+            if RUN_CLEARVOICE_TSE:
+                print("ClearVoice / MossFormer2 TSE sẽ được tải tự động bởi ModelScope khi chạy pipeline.")
             else:
-                print("RUN_SEPREFORMER=False, bỏ qua SepReformer")
+                print("RUN_CLEARVOICE_TSE=False, bỏ qua ClearVoice")
 
             os.chdir(PIPELINE_DIR)
             """
@@ -443,7 +420,7 @@ def main() -> None:
                 if not required.exists():
                     raise FileNotFoundError(
                         f"Không tìm thấy stage 01 artifact: {required}\\n"
-                        "Hãy chạy notebook 07 trước, hoặc điền đúng STAGE1_RUN_DIR."
+                        "Vui lòng kiểm tra lại đường dẫn DIARIZATION_JSON_PATH hoặc AUDIO_WAV_PATH."
                     )
             print("Stage 01 artifacts OK")
             print("DIARIZATION_JSON =", DIARIZATION_JSON)
@@ -455,20 +432,21 @@ def main() -> None:
             """
             cmd = [
                 "python", str(PIPELINE_DIR / "run_stage_music_overlap_only.py"),
-                "--input_run_dir", str(RUN_DIR),
+                "--audio_path", str(FULL_AUDIO_PATH),
+                "--diarization_json", str(DIARIZATION_JSON),
+                "--output_run_dir", str(RUN_DIR),
                 "--config_path", str(CONFIG_PATH),
                 "--overlap_threshold", str(OVERLAP_THRESHOLD),
                 "--demucs_padding", str(DEMUCS_PADDING),
                 "--demucs_model_name", DEMUCS_MODEL_NAME,
                 "--panns_data_dir", str(PROJECT_ROOT / "panns_data"),
-                "--sepreformer_path", str(PROJECT_ROOT / "SepReformer"),
                 "--panns_device_index", str(PANNS_DEVICE_INDEX),
                 "--demucs_device_index", str(DEMUCS_DEVICE_INDEX),
-                "--sepreformer_device_index", str(SEPREFORMER_DEVICE_INDEX),
+                "--clearvoice_device_index", str(CLEARVOICE_DEVICE_INDEX),
                 "--demucs" if RUN_DEMUCS else "--no-demucs",
-                "--sepreformer" if RUN_SEPREFORMER else "--no-sepreformer",
+                "--clearvoice_tse" if RUN_CLEARVOICE_TSE else "--no-clearvoice_tse",
             ]
-            run_logged(cmd, f"20_stage_02_03_{AUDIO_PATH.stem}.log", cwd=PIPELINE_DIR, env=os.environ.copy(), tail=80)
+            run_logged(cmd, f"20_stage_02_03_{FULL_AUDIO_PATH.stem}.log", cwd=PIPELINE_DIR, env=os.environ.copy(), tail=80)
             """
         ),
         md("## 9. In kết quả stage 02 + 03"),

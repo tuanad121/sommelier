@@ -141,7 +141,7 @@ class StageDiarizationOnlyTests(unittest.TestCase):
         self.assertIn('parser.add_argument("--sortformer-pp-onset", type=float, default=0.3', text)
         self.assertIn('parser.add_argument("--sortformer-pp-offset", type=float, default=0.33', text)
         self.assertIn('parser.add_argument("--sortformer-pp-pad-onset", type=float, default=0.02', text)
-        self.assertIn('parser.add_argument("--sortformer-pp-pad-offset", type=float, default=-0.08', text)
+        self.assertIn('parser.add_argument("--sortformer-pp-pad-offset", type=float, default=-0.13', text)
         self.assertIn('parser.add_argument("--sortformer-pp-min-duration-on", type=float, default=0.28', text)
         self.assertIn('parser.add_argument("--sortformer-pp-min-duration-off", type=float, default=0.4', text)
         self.assertNotIn("speaker_embedder.get_embedding", text)
