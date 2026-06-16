@@ -487,8 +487,23 @@ def _apply_boundary_tuning(
     updated.loc[seg_idx, "start"] = new_start
     updated.loc[seg_idx, "end"] = new_end
 
-    return updated, {
-        "action": "trim_boundary",
+    action = "shift"
+    speakers = None
+    if new_start < old_start and seg_idx > 0:
+        previous_speaker = str(refined.loc[seg_idx - 1, "speaker"])
+        previous_span = _speaker_span(mapped, previous_speaker)
+        if previous_span is not None and previous_span[1] - old_start >= float(config.min_overlap_duration):
+            action = "mark_overlap"
+            speakers = [previous_speaker, speaker]
+    if new_end > old_end and seg_idx + 1 < len(refined):
+        next_speaker = str(refined.loc[seg_idx + 1, "speaker"])
+        next_span = _speaker_span(mapped, next_speaker)
+        if next_span is not None and old_end - next_span[0] >= float(config.min_overlap_duration):
+            action = "mark_overlap"
+            speakers = [speaker, next_speaker]
+
+    adjustment = {
+        "action": action,
         "region": _region_payload(region),
         "segment_index": seg_idx,
         "speaker": speaker,
@@ -498,6 +513,11 @@ def _apply_boundary_tuning(
         "new_end": new_end,
         "confidence": "high",
     }
+    if action == "shift":
+        adjustment["new_boundary"] = new_start if new_start != old_start else new_end
+    if speakers is not None:
+        adjustment["speakers"] = speakers
+    return updated, adjustment
 
 
 def _apply_interior_region(
@@ -618,6 +638,436 @@ def apply_resegmentation_audit(
         if adjustment is not None:
             adjustment["local_activity"] = _mapped_payload(mapped)
             report["adjustments"].append(adjustment)
+
+    refined = _drop_tiny_segments(refined, config.min_duration)
+    refined = _refresh_labels(refined)
+    report["metadata"]["adjustment_count"] = len(report["adjustments"])
+    return refined, report
+
+
+def _classify_sliding_window(
+    embedding: Any,
+    *,
+    left_reference: np.ndarray,
+    right_reference: np.ndarray,
+    left_speaker: str,
+    right_speaker: str,
+    config: SlidingWindowAuditConfig,
+) -> tuple[str | None, bool, bool, float, float]:
+    vector = _as_embedding(embedding)
+    left_score = _cosine_similarity(vector, left_reference)
+    right_score = _cosine_similarity(vector, right_reference)
+    contains_left = left_score >= float(config.threshold_high)
+    contains_right = right_score >= float(config.threshold_high)
+    if contains_left and contains_right:
+        return "OVERLAP", contains_left, contains_right, left_score, right_score
+    if contains_left:
+        return left_speaker, contains_left, contains_right, left_score, right_score
+    if contains_right:
+        return right_speaker, contains_left, contains_right, left_score, right_score
+    return None, contains_left, contains_right, left_score, right_score
+
+
+def _sliding_window_samples(
+    *,
+    left_speaker: str,
+    right_speaker: str,
+    left_reference: np.ndarray,
+    right_reference: np.ndarray,
+    boundary: float,
+    left_start: float,
+    right_end: float,
+    config: SlidingWindowAuditConfig,
+    embedding_fn: Callable[[float, float], Any],
+) -> list[dict[str, Any]]:
+    window_size = max(float(config.window_size), 0.001)
+    step_size = max(float(config.step_size), 0.001)
+    half_window = window_size / 2.0
+    scan_start = max(float(left_start), float(boundary) - float(config.max_shift) - half_window)
+    scan_end = min(float(right_end), float(boundary) + float(config.max_shift) + half_window)
+    first_center = scan_start + half_window
+    last_center = scan_end - half_window
+    if last_center < first_center:
+        return []
+
+    samples: list[dict[str, Any]] = []
+    center = first_center
+    while center <= last_center + 1e-9:
+        start = round(center - half_window, 6)
+        end = round(center + half_window, 6)
+        try:
+            embedding = embedding_fn(start, end)
+        except Exception:
+            embedding = None
+        label, contains_left, contains_right, left_score, right_score = _classify_sliding_window(
+            embedding,
+            left_reference=left_reference,
+            right_reference=right_reference,
+            left_speaker=left_speaker,
+            right_speaker=right_speaker,
+            config=config,
+        )
+        samples.append(
+            {
+                "start": round(start, 3),
+                "end": round(end, 3),
+                "center": round(float(center), 3),
+                "speaker": label,
+                "state": _sliding_sample_state(bool(contains_left), bool(contains_right)),
+                "contains_left": bool(contains_left),
+                "contains_right": bool(contains_right),
+                "left_score": round(float(left_score), 6),
+                "right_score": round(float(right_score), 6),
+            }
+        )
+        center += step_size
+    return samples
+
+
+def _sliding_sample_state(contains_left: bool, contains_right: bool) -> str:
+    if contains_left and contains_right:
+        return "A_AND_B"
+    if contains_left:
+        return "A_ONLY"
+    if contains_right:
+        return "B_ONLY"
+    return "UNKNOWN"
+
+
+def _nearest_state_run(
+    samples: list[dict[str, Any]],
+    *,
+    old_boundary: float,
+    side: str,
+) -> tuple[str, list[dict[str, Any]]]:
+    if side == "left":
+        ordered = sorted(
+            [
+                sample
+                for sample in samples
+                if float(sample["center"]) < float(old_boundary) - 1e-9
+            ],
+            key=lambda sample: float(sample["center"]),
+            reverse=True,
+        )
+    else:
+        ordered = sorted(
+            [
+                sample
+                for sample in samples
+                if float(sample["center"]) >= float(old_boundary) - 1e-9
+            ],
+            key=lambda sample: float(sample["center"]),
+        )
+    if not ordered:
+        return "UNKNOWN", []
+
+    state = str(ordered[0].get("state", "UNKNOWN"))
+    run: list[dict[str, Any]] = []
+    for sample in ordered:
+        if str(sample.get("state", "UNKNOWN")) != state:
+            break
+        run.append(sample)
+    return state, run
+
+
+def _first_right_boundary_after_a_only(
+    samples: list[dict[str, Any]],
+    *,
+    a_only_run: list[dict[str, Any]],
+) -> float:
+    last_a_only = max(float(sample["center"]) for sample in a_only_run)
+    for sample in sorted(
+        [
+            item
+            for item in samples
+            if float(item["center"]) > last_a_only + 1e-9
+        ],
+        key=lambda item: float(item["center"]),
+    ):
+        if bool(sample.get("contains_right")):
+            return float(sample["center"])
+    return last_a_only
+
+
+def _boundary_decision_from_contains(
+    samples: list[dict[str, Any]],
+    *,
+    old_boundary: float,
+) -> dict[str, Any]:
+    tail_state, tail_run = _nearest_state_run(samples, old_boundary=old_boundary, side="left")
+    head_state, head_run = _nearest_state_run(samples, old_boundary=old_boundary, side="right")
+
+    if tail_state == "B_ONLY" and head_state == "A_ONLY":
+        return {
+            "action": "skip",
+            "reason": "conflicting_boundary_evidence",
+            "tail_state": tail_state,
+            "head_state": head_state,
+        }
+
+    if tail_state == "B_ONLY" and tail_run:
+        return {
+            "action": "shift",
+            "direction": "left",
+            "new_boundary": min(float(sample["center"]) for sample in tail_run),
+            "tail_state": tail_state,
+            "head_state": head_state,
+        }
+
+    if head_state == "A_ONLY" and head_run:
+        return {
+            "action": "shift",
+            "direction": "right",
+            "new_boundary": _first_right_boundary_after_a_only(
+                samples,
+                a_only_run=head_run,
+            ),
+            "tail_state": tail_state,
+            "head_state": head_state,
+        }
+
+    overlap_start = None
+    overlap_end = None
+    directions: list[str] = []
+    if tail_state == "A_AND_B" and tail_run:
+        overlap_start = min(float(sample["center"]) for sample in tail_run)
+        directions.append("left_overlap")
+    if head_state == "A_AND_B" and head_run:
+        overlap_end = max(float(sample["center"]) for sample in head_run)
+        if overlap_end > float(old_boundary) + 1e-9:
+            directions.append("right_overlap")
+
+    if overlap_start is not None or overlap_end is not None:
+        direction = "_and_".join(directions) if directions else "overlap"
+        return {
+            "action": "mark_overlap",
+            "direction": direction,
+            "new_right_start": overlap_start,
+            "new_left_end": overlap_end,
+            "tail_state": tail_state,
+            "head_state": head_state,
+        }
+
+    if tail_state == "UNKNOWN" or head_state == "UNKNOWN":
+        return {
+            "action": "skip",
+            "reason": "no_confident_switch",
+            "tail_state": tail_state,
+            "head_state": head_state,
+        }
+
+    return {
+        "action": "keep",
+        "reason": "boundary_valid",
+        "tail_state": tail_state,
+        "head_state": head_state,
+    }
+
+
+def _sliding_region_payload(
+    *,
+    index: int,
+    left: pd.Series,
+    right: pd.Series,
+    boundary: float,
+) -> dict[str, Any]:
+    return {
+        "kind": "adjacent_boundary",
+        "left_index": int(index),
+        "right_index": int(index + 1),
+        "left_speaker": str(left["speaker"]),
+        "right_speaker": str(right["speaker"]),
+        "start": round(float(left["start"]), 3),
+        "end": round(float(right["end"]), 3),
+        "boundary": round(float(boundary), 3),
+    }
+
+
+def apply_sliding_window_audit(
+    df: pd.DataFrame,
+    *,
+    config: SlidingWindowAuditConfig | None = None,
+    embedding_fn: Callable[[float, float], Any],
+    references: dict[str, Any] | None = None,
+    min_segment_duration: float = 2.0,
+    max_segments_per_speaker: int = 6,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    config = config or SlidingWindowAuditConfig()
+    refined = df.sort_values("start").reset_index(drop=True).copy()
+    reference_report: dict[str, Any] = {}
+    report: dict[str, Any] = {
+        "metadata": {
+            "enabled": bool(config.enabled),
+            "method": "sliding_window",
+            "config": asdict(config),
+            "candidate_count": 0,
+            "adjustment_count": 0,
+            "reference_report": reference_report,
+        },
+        "adjustments": [],
+        "skipped_regions": [],
+    }
+
+    if not bool(config.enabled) or refined.empty:
+        return refined, report
+
+    if references is None:
+        references, reference_report = build_global_references(
+            refined,
+            embedding_fn=embedding_fn,
+            min_segment_duration=float(min_segment_duration),
+            max_segments_per_speaker=int(max_segments_per_speaker),
+        )
+        report["metadata"]["reference_report"] = reference_report
+
+    normalized_refs = _normalized_references(references)
+    if len(normalized_refs) < 2:
+        report["skipped_regions"].append({"reason": "not_enough_global_references"})
+        return refined, report
+
+    for idx in range(len(refined) - 1):
+        left = refined.loc[idx]
+        right = refined.loc[idx + 1]
+        left_speaker = str(left["speaker"])
+        right_speaker = str(right["speaker"])
+        if left_speaker == right_speaker:
+            continue
+
+        left_reference = normalized_refs.get(left_speaker)
+        right_reference = normalized_refs.get(right_speaker)
+        old_left_end = float(left["end"])
+        old_right_start = float(right["start"])
+        old_boundary = (old_left_end + old_right_start) / 2.0
+        region = _sliding_region_payload(index=idx, left=left, right=right, boundary=old_boundary)
+        report["metadata"]["candidate_count"] += 1
+
+        if left_reference is None or right_reference is None:
+            report["skipped_regions"].append({"reason": "missing_boundary_reference", "region": region})
+            continue
+        if _cosine_similarity(left_reference, right_reference) >= float(config.threshold_high):
+            report["skipped_regions"].append({"reason": "no_confident_switch", "region": region})
+            continue
+
+        samples = _sliding_window_samples(
+            left_speaker=left_speaker,
+            right_speaker=right_speaker,
+            left_reference=left_reference,
+            right_reference=right_reference,
+            boundary=old_boundary,
+            left_start=float(left["start"]),
+            right_end=float(right["end"]),
+            config=config,
+            embedding_fn=embedding_fn,
+        )
+        decision = _boundary_decision_from_contains(
+            samples,
+            old_boundary=old_boundary,
+        )
+
+        if decision["action"] == "keep":
+            continue
+
+        if decision["action"] == "skip":
+            report["skipped_regions"].append(
+                {
+                    "reason": decision["reason"],
+                    "region": region,
+                    "tail_state": decision.get("tail_state"),
+                    "head_state": decision.get("head_state"),
+                    "windows": samples,
+                }
+            )
+            continue
+
+        if decision["action"] == "shift":
+            new_boundary = round(float(decision["new_boundary"]), 3)
+            if abs(new_boundary - old_boundary) <= float(config.snap_tolerance):
+                continue
+            if abs(new_boundary - old_boundary) > float(config.max_shift):
+                report["skipped_regions"].append(
+                    {
+                        "reason": "shift_exceeds_limit",
+                        "region": region,
+                        "new_boundary": new_boundary,
+                        "windows": samples,
+                    }
+                )
+                continue
+            if new_boundary - float(left["start"]) < float(config.min_duration) or float(right["end"]) - new_boundary < float(config.min_duration):
+                report["skipped_regions"].append(
+                    {
+                        "reason": "segment_too_short_after_shift",
+                        "region": region,
+                        "new_boundary": new_boundary,
+                        "windows": samples,
+                    }
+                )
+                continue
+
+            refined.loc[idx, "end"] = new_boundary
+            refined.loc[idx + 1, "start"] = new_boundary
+            report["adjustments"].append(
+                {
+                    "action": "shift",
+                    "method": "sliding_window",
+                    "region": region,
+                    "speakers": [left_speaker, right_speaker],
+                    "old_boundary": round(float(old_boundary), 3),
+                    "new_boundary": new_boundary,
+                    "shift": round(new_boundary - old_boundary, 3),
+                    "direction": decision["direction"],
+                    "tail_state": decision.get("tail_state"),
+                    "head_state": decision.get("head_state"),
+                    "confidence": "high",
+                    "windows": samples,
+                }
+            )
+            continue
+
+        if decision["action"] == "mark_overlap":
+            new_left_end = old_left_end
+            new_right_start = old_right_start
+            if decision.get("new_left_end") is not None:
+                new_left_end = round(float(decision["new_left_end"]), 3)
+            if decision.get("new_right_start") is not None:
+                new_right_start = round(float(decision["new_right_start"]), 3)
+
+            left_extension = max(0.0, new_left_end - old_left_end)
+            right_extension = max(0.0, old_right_start - new_right_start)
+            if left_extension <= float(config.snap_tolerance) and right_extension <= float(config.snap_tolerance):
+                continue
+            if left_extension > float(config.max_extend) or right_extension > float(config.max_extend):
+                report["skipped_regions"].append(
+                    {
+                        "reason": "overlap_extend_exceeds_limit",
+                        "region": region,
+                        "new_left_end": new_left_end,
+                        "new_right_start": new_right_start,
+                        "windows": samples,
+                    }
+                )
+                continue
+
+            refined.loc[idx, "end"] = max(old_left_end, new_left_end)
+            refined.loc[idx + 1, "start"] = min(old_right_start, new_right_start)
+            report["adjustments"].append(
+                {
+                    "action": "mark_overlap",
+                    "method": "sliding_window",
+                    "region": region,
+                    "speakers": [left_speaker, right_speaker],
+                    "old_left_end": round(float(old_left_end), 3),
+                    "old_right_start": round(float(old_right_start), 3),
+                    "new_left_end": round(float(refined.loc[idx, "end"]), 3),
+                    "new_right_start": round(float(refined.loc[idx + 1, "start"]), 3),
+                    "direction": decision["direction"],
+                    "tail_state": decision.get("tail_state"),
+                    "head_state": decision.get("head_state"),
+                    "confidence": "high",
+                    "windows": samples,
+                }
+            )
 
     refined = _drop_tiny_segments(refined, config.min_duration)
     refined = _refresh_labels(refined)

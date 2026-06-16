@@ -16,7 +16,9 @@ sys.path.insert(0, str(PIPELINE_DIR))
 from utils.speaker_resegmentation import (  # noqa: E402
     AuditConfig,
     LocalActivity,
+    SlidingWindowAuditConfig,
     apply_resegmentation_audit,
+    apply_sliding_window_audit,
     build_global_references,
     decode_frame_states,
     map_local_activities_to_global,
@@ -199,6 +201,198 @@ class SpeakerResegmentationTests(unittest.TestCase):
         self.assertEqual(report["adjustments"], [])
         self.assertGreaterEqual(len(report["skipped_regions"]), 1)
         self.assertEqual(report["skipped_regions"][0]["reason"], "uncertain_local_mapping")
+
+    def test_sliding_window_audit_shifts_adjacent_boundary_from_embeddings(self):
+        segments = _df([
+            ("SPEAKER_00", 0.0, 5.0),
+            ("SPEAKER_01", 5.0, 10.0),
+        ])
+
+        def embedding_fn(start, end):
+            center = (float(start) + float(end)) / 2.0
+            if center < 4.6:
+                return np.asarray([1.0, 0.0])
+            return np.asarray([0.0, 1.0])
+
+        refined, report = apply_sliding_window_audit(
+            segments,
+            config=SlidingWindowAuditConfig(
+                window_size=0.2,
+                step_size=0.1,
+                threshold_high=0.75,
+                threshold_low=0.55,
+                max_shift=0.8,
+                min_duration=0.3,
+            ),
+            embedding_fn=embedding_fn,
+            references=_refs(),
+            min_segment_duration=1.0,
+            max_segments_per_speaker=2,
+        )
+
+        self.assertAlmostEqual(float(refined.loc[0, "end"]), 4.6)
+        self.assertAlmostEqual(float(refined.loc[1, "start"]), 4.6)
+        self.assertEqual(report["adjustments"][0]["action"], "shift")
+        self.assertEqual(report["adjustments"][0]["method"], "sliding_window")
+        self.assertEqual(report["metadata"]["adjustment_count"], 1)
+
+    def test_sliding_window_audit_pulls_head_of_right_segment_into_left_speaker(self):
+        segments = _df([
+            ("SPEAKER_00", 0.0, 5.0),
+            ("SPEAKER_01", 5.0, 10.0),
+        ])
+
+        def embedding_fn(start, end):
+            center = (float(start) + float(end)) / 2.0
+            if center < 5.4:
+                return np.asarray([1.0, 0.0])
+            return np.asarray([0.0, 1.0])
+
+        refined, report = apply_sliding_window_audit(
+            segments,
+            config=SlidingWindowAuditConfig(
+                window_size=0.2,
+                step_size=0.1,
+                threshold_high=0.75,
+                max_shift=0.8,
+                min_duration=0.3,
+            ),
+            embedding_fn=embedding_fn,
+            references=_refs(),
+            min_segment_duration=1.0,
+            max_segments_per_speaker=2,
+        )
+
+        self.assertAlmostEqual(float(refined.loc[0, "end"]), 5.4)
+        self.assertAlmostEqual(float(refined.loc[1, "start"]), 5.4)
+        self.assertEqual(report["adjustments"][0]["action"], "shift")
+        self.assertEqual(report["adjustments"][0]["direction"], "right")
+
+    def test_sliding_window_audit_marks_overlap_when_right_head_contains_both_speakers(self):
+        segments = _df([
+            ("SPEAKER_00", 0.0, 5.0),
+            ("SPEAKER_01", 5.0, 10.0),
+        ])
+
+        def embedding_fn(start, end):
+            center = (float(start) + float(end)) / 2.0
+            if center < 5.0:
+                return np.asarray([1.0, 0.0])
+            if center < 5.4:
+                return np.asarray([1.0, 1.0])
+            return np.asarray([0.0, 1.0])
+
+        refined, report = apply_sliding_window_audit(
+            segments,
+            config=SlidingWindowAuditConfig(
+                window_size=0.2,
+                step_size=0.1,
+                threshold_high=0.65,
+                max_shift=0.8,
+                min_duration=0.3,
+            ),
+            embedding_fn=embedding_fn,
+            min_segment_duration=1.0,
+            max_segments_per_speaker=2,
+        )
+
+        self.assertAlmostEqual(float(refined.loc[0, "end"]), 5.3)
+        self.assertAlmostEqual(float(refined.loc[1, "start"]), 5.0)
+        self.assertEqual(report["adjustments"][0]["action"], "mark_overlap")
+        self.assertEqual(report["adjustments"][0]["direction"], "right_overlap")
+
+    def test_sliding_window_audit_marks_overlap_when_left_tail_contains_both_speakers(self):
+        segments = _df([
+            ("SPEAKER_00", 0.0, 5.0),
+            ("SPEAKER_01", 5.0, 10.0),
+        ])
+
+        def embedding_fn(start, end):
+            center = (float(start) + float(end)) / 2.0
+            if center < 4.6:
+                return np.asarray([1.0, 0.0])
+            if center <= 5.0:
+                return np.asarray([1.0, 1.0])
+            return np.asarray([0.0, 1.0])
+
+        refined, report = apply_sliding_window_audit(
+            segments,
+            config=SlidingWindowAuditConfig(
+                window_size=0.2,
+                step_size=0.1,
+                threshold_high=0.65,
+                max_shift=0.8,
+                max_extend=0.8,
+                min_duration=0.3,
+            ),
+            embedding_fn=embedding_fn,
+            min_segment_duration=1.0,
+            max_segments_per_speaker=2,
+        )
+
+        self.assertAlmostEqual(float(refined.loc[0, "end"]), 5.0)
+        self.assertAlmostEqual(float(refined.loc[1, "start"]), 4.6)
+        self.assertEqual(report["adjustments"][0]["action"], "mark_overlap")
+        self.assertEqual(report["adjustments"][0]["direction"], "left_overlap")
+
+    def test_sliding_window_audit_skips_conflicting_swapped_boundary_evidence(self):
+        segments = _df([
+            ("SPEAKER_00", 0.0, 5.0),
+            ("SPEAKER_01", 5.0, 10.0),
+        ])
+
+        def embedding_fn(start, end):
+            center = (float(start) + float(end)) / 2.0
+            if center < 5.0:
+                return np.asarray([0.0, 1.0])
+            return np.asarray([1.0, 0.0])
+
+        refined, report = apply_sliding_window_audit(
+            segments,
+            config=SlidingWindowAuditConfig(
+                window_size=0.2,
+                step_size=0.1,
+                threshold_high=0.75,
+                max_shift=0.8,
+                min_duration=0.3,
+            ),
+            embedding_fn=embedding_fn,
+            references=_refs(),
+            min_segment_duration=1.0,
+            max_segments_per_speaker=2,
+        )
+
+        self.assertEqual(refined[["speaker", "start", "end"]].to_dict("records"), segments[["speaker", "start", "end"]].to_dict("records"))
+        self.assertEqual(report["adjustments"], [])
+        self.assertEqual(report["skipped_regions"][0]["reason"], "conflicting_boundary_evidence")
+
+    def test_sliding_window_audit_skips_when_windows_are_ambiguous(self):
+        segments = _df([
+            ("SPEAKER_00", 0.0, 5.0),
+            ("SPEAKER_01", 5.0, 10.0),
+        ])
+
+        def embedding_fn(start, end):
+            return np.asarray([0.6, 0.6])
+
+        refined, report = apply_sliding_window_audit(
+            segments,
+            config=SlidingWindowAuditConfig(
+                window_size=0.2,
+                step_size=0.1,
+                threshold_high=0.95,
+                threshold_low=0.55,
+                max_shift=0.8,
+                min_duration=0.3,
+            ),
+            embedding_fn=embedding_fn,
+            min_segment_duration=1.0,
+            max_segments_per_speaker=2,
+        )
+
+        self.assertEqual(refined[["speaker", "start", "end"]].to_dict("records"), segments[["speaker", "start", "end"]].to_dict("records"))
+        self.assertEqual(report["adjustments"], [])
+        self.assertEqual(report["skipped_regions"][0]["reason"], "no_confident_switch")
 
     def test_write_resegmentation_report_serializes_adjustments(self):
         with tempfile.TemporaryDirectory() as tmp:

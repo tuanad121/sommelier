@@ -238,6 +238,8 @@ def _resegmentation_config_from_args(args) -> AuditConfig:
 def _load_local_resegmentation_pipeline(args, cfg: dict[str, Any], device: torch.device, logger):
     if not bool(args.speaker_resegmentation_audit):
         return None
+    if args.speaker_resegmentation_method != "pyannote":
+        return None
     try:
         from pyannote.audio import Pipeline
 
@@ -517,10 +519,23 @@ def process_audio(
                         max_extend=args.resegmentation_max_extend,
                         min_duration=args.resegmentation_min_duration,
                     )
+
+                    def sliding_embedding_fn(start: float, end: float):
+                        duration = max(0.0, float(end) - float(start))
+                        return _extract_speaker_embedding(
+                            audio,
+                            start,
+                            end,
+                            embedder=speaker_embedder,
+                            sample_window=max(duration, float(args.sliding_window_size)),
+                            min_duration=max(0.01, min(float(args.sliding_window_size), duration)),
+                        )
+
                     speakerdia, resegmentation_report = apply_sliding_window_audit(
                         speakerdia,
                         config=sliding_config,
-                        embedding_fn=lambda s, e: speaker_embedder.get_embedding(audio, s, e),
+                        embedding_fn=sliding_embedding_fn,
+                        references=references,
                         min_segment_duration=float(args.resegmentation_reference_min_segment),
                         max_segments_per_speaker=int(args.resegmentation_reference_max_segments),
                     )

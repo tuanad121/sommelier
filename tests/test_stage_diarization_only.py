@@ -126,6 +126,8 @@ class StageDiarizationOnlyTests(unittest.TestCase):
             self.assertIn(flag, text)
 
         self.assertIn("apply_resegmentation_audit", text)
+        self.assertIn("apply_sliding_window_audit", text)
+        self.assertIn("SlidingWindowAuditConfig", text)
         self.assertIn("write_resegmentation_report", text)
         self.assertIn("speaker_resegmentation_audit_enabled", text)
         self.assertIn("speaker_resegmentation_audit_report", text)
@@ -148,6 +150,14 @@ class StageDiarizationOnlyTests(unittest.TestCase):
         self.assertIn('parser.add_argument("--sortformer-pp-pad-offset", type=float, default=0.015', text)
         self.assertIn('parser.add_argument("--sortformer-pp-min-duration-on", type=float, default=0.35', text)
         self.assertIn('parser.add_argument("--sortformer-pp-min-duration-off", type=float, default=0.35', text)
+        self.assertIn('choices=["pyannote", "sliding_window"]', text)
+        self.assertIn('parser.add_argument("--sliding-window-size"', text)
+        self.assertIn('parser.add_argument("--sliding-step-size"', text)
+        self.assertIn('parser.add_argument("--sliding-threshold-high"', text)
+        self.assertIn('parser.add_argument("--sliding-threshold-low"', text)
+        self.assertIn("embedding_fn=sliding_embedding_fn", text)
+        self.assertIn('args.speaker_resegmentation_method != "pyannote"', text)
+        self.assertNotIn("speaker_embedder.get_embedding", text)
 
     def test_apply_sortformer_streaming_config_sets_v21_cache_parameters(self):
         from utils.stage_diarization import apply_sortformer_streaming_config
