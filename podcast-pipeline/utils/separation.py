@@ -8,6 +8,7 @@ Includes SepReformer-based speaker separation and overlapping segment processing
 
 import os
 import sys
+from pathlib import Path
 import numpy as np
 import librosa
 import torch
@@ -174,82 +175,160 @@ class SepReformerSeparator:
             return audio_segment, audio_segment
 
 
-class ClearVoiceTSESeparator:
+class MetisTSESeparator:
     """
-    Wrapper for ModelScope ClearerVoice (MossFormer2) Target Speaker Extraction.
+    Wrapper for Amphion Metis Target Speaker Extraction.
     """
-    def __init__(self, model_name='damo/speech_mossformer2_tse_16k', device="cuda"):
-        from clearvoice import ClearVoice
-        import os
-        
+    is_tse = True
+
+    def __init__(
+        self,
+        repo_dir,
+        ckpt_dir=None,
+        device="cuda:0",
+        n_timesteps=10,
+        guidance_cfg=0.0,
+    ):
+        from huggingface_hub import snapshot_download
+
+        repo_dir = Path(repo_dir).expanduser().resolve()
+        if not repo_dir.exists():
+            raise FileNotFoundError(
+                f"Metis repo_dir not found: {repo_dir}. Clone open-mmlab/Amphion first."
+            )
+
+        ckpt_dir = Path(ckpt_dir).expanduser().resolve() if ckpt_dir else repo_dir / "models" / "tts" / "metis" / "ckpt"
+        ckpt_dir.mkdir(parents=True, exist_ok=True)
+
+        self.repo_dir = repo_dir
+        self.ckpt_dir = ckpt_dir
         self.device = device
-        self.is_tse = True # Flag to indicate this is a Target Speaker Extraction model
-        
-        # ModelScope requires some ENV vars to use custom cache dirs if needed, but defaults are usually fine
-        print(f"[ClearVoice] Initializing Target Speaker Extraction model on {device}: {model_name}")
-        
-        # In Kaggle/Linux, the clearvoice pipeline uses 'task' and 'model_names'
+        self.n_timesteps = int(n_timesteps)
+        self.guidance_cfg = float(guidance_cfg)
+        self.sample_rate = 24000
+
+        print(f"[Metis] Initializing Target Speaker Extraction model on {device}")
+        original_cwd = os.getcwd()
+        original_sys_path = sys.path.copy()
+        cleared_modules = {}
+        original_work_dir = os.environ.get("WORK_DIR")
         try:
-            self.myClearVoice = ClearVoice(task='target_speaker_extraction', model_names=[model_name])
-            print("[ClearVoice] Model initialization complete!")
+            if str(repo_dir) not in sys.path:
+                sys.path.insert(0, str(repo_dir))
+            for module_name in list(sys.modules.keys()):
+                if module_name == "models" or module_name.startswith("models.") or module_name == "utils" or module_name.startswith("utils."):
+                    cleared_modules[module_name] = sys.modules[module_name]
+                    del sys.modules[module_name]
+
+            os.chdir(repo_dir)
+            os.environ["WORK_DIR"] = str(repo_dir)
+            from models.tts.metis.metis import Metis
+            from utils.util import load_config
+
+            metis_cfg = load_config(str(repo_dir / "models" / "tts" / "metis" / "config" / "tse.json"))
+            base_ckpt_dir = snapshot_download(
+                "amphion/metis",
+                repo_type="model",
+                local_dir=str(ckpt_dir),
+                allow_patterns=["metis_base/model.safetensors"],
+            )
+            lora_ckpt_dir = snapshot_download(
+                "amphion/metis",
+                repo_type="model",
+                local_dir=str(ckpt_dir),
+                allow_patterns=["metis_tse/metis_tse_lora_32.safetensors"],
+            )
+            adapter_ckpt_dir = snapshot_download(
+                "amphion/metis",
+                repo_type="model",
+                local_dir=str(ckpt_dir),
+                allow_patterns=["metis_tse/metis_tse_lora_32_adapter.safetensors"],
+            )
+
+            self.model = Metis(
+                base_ckpt_path=str(Path(base_ckpt_dir) / "metis_base" / "model.safetensors"),
+                lora_ckpt_path=str(Path(lora_ckpt_dir) / "metis_tse" / "metis_tse_lora_32.safetensors"),
+                adapter_ckpt_path=str(Path(adapter_ckpt_dir) / "metis_tse" / "metis_tse_lora_32_adapter.safetensors"),
+                cfg=metis_cfg,
+                device=device,
+                model_type="tse",
+            )
+            print("[Metis] Target Speaker Extraction model initialization complete!")
         except Exception as e:
-            logger.error(f"Failed to initialize ClearVoice TSE: {e}")
-            raise e
+            if logger:
+                logger.error(f"Failed to initialize Metis TSE: {e}")
+            raise
+        finally:
+            os.chdir(original_cwd)
+            if original_work_dir is None:
+                os.environ.pop("WORK_DIR", None)
+            else:
+                os.environ["WORK_DIR"] = original_work_dir
+            sys.path = original_sys_path
+            for module_name in list(sys.modules.keys()):
+                if module_name == "models" or module_name.startswith("models.") or module_name == "utils" or module_name.startswith("utils."):
+                    del sys.modules[module_name]
+            for module_name, module_obj in cleared_modules.items():
+                sys.modules[module_name] = module_obj
+
+    def _match_length(self, audio_segment, target_length):
+        audio_segment = np.asarray(audio_segment, dtype=np.float32).reshape(-1)
+        if len(audio_segment) > target_length:
+            return audio_segment[:target_length]
+        if len(audio_segment) < target_length:
+            return np.pad(audio_segment, (0, target_length - len(audio_segment)), mode="constant")
+        return audio_segment
 
     def separate_target(self, mixed_audio, reference_audio, sample_rate):
         """
-        Perform Target Speaker Extraction.
+        Extract the target speaker using a clean reference segment as prompt audio.
         """
         import tempfile
         import soundfile as sf
-        import librosa
-        
+
+        mix_path = None
+        ref_path = None
         try:
-            target_sr = 16000
-            if sample_rate != target_sr:
-                mixed_16k = librosa.resample(mixed_audio, orig_sr=sample_rate, target_sr=target_sr)
-                ref_16k = librosa.resample(reference_audio, orig_sr=sample_rate, target_sr=target_sr)
+            target_length = len(mixed_audio)
+            if sample_rate != self.sample_rate:
+                mixed_model_sr = librosa.resample(mixed_audio, orig_sr=sample_rate, target_sr=self.sample_rate)
+                ref_model_sr = librosa.resample(reference_audio, orig_sr=sample_rate, target_sr=self.sample_rate)
             else:
-                mixed_16k = mixed_audio
-                ref_16k = reference_audio
+                mixed_model_sr = mixed_audio
+                ref_model_sr = reference_audio
 
-            # Write to temp files since clearvoice pipeline expects paths
-            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as f_mix, \
-                 tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as f_ref, \
-                 tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as f_out:
-                mix_path = f_mix.name
-                ref_path = f_ref.name
-                out_path = f_out.name
-                
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as mix_file, \
+                 tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as ref_file:
+                mix_path = mix_file.name
+                ref_path = ref_file.name
+
+            sf.write(mix_path, mixed_model_sr, self.sample_rate)
+            sf.write(ref_path, ref_model_sr, self.sample_rate)
+
+            original_cwd = os.getcwd()
             try:
-                sf.write(mix_path, mixed_16k, target_sr)
-                sf.write(ref_path, ref_16k, target_sr)
-                
-                # Run MossFormer2 TSE
-                output_wav_dict = self.myClearVoice(input_path=mix_path, online_write=False, reference_path=ref_path)
-                
-                # output_wav_dict is usually a dict { 'mixture_name': audio_array }
-                # But myClearVoice.write handles it
-                self.myClearVoice.write(output_wav_dict, output_path=out_path)
-                
-                # Read back
-                extracted_audio, _ = librosa.load(out_path, sr=sample_rate)
-                
-                # Length matching due to resample/saving
-                target_length = len(mixed_audio)
-                if len(extracted_audio) != target_length:
-                    extracted_audio = np.pad(extracted_audio, (0, max(0, target_length - len(extracted_audio))))[:target_length]
-                    
-                return extracted_audio
+                os.chdir(self.repo_dir)
+                extracted_audio = self.model(
+                    prompt_speech_path=ref_path,
+                    source_speech_path=mix_path,
+                    cfg=self.guidance_cfg,
+                    n_timesteps=self.n_timesteps,
+                    model_type="tse",
+                )
             finally:
-                if os.path.exists(mix_path): os.remove(mix_path)
-                if os.path.exists(ref_path): os.remove(ref_path)
-                if os.path.exists(out_path): os.remove(out_path)
+                os.chdir(original_cwd)
 
+            if sample_rate != self.sample_rate:
+                extracted_audio = librosa.resample(extracted_audio, orig_sr=self.sample_rate, target_sr=sample_rate)
+            return self._match_length(extracted_audio, target_length)
         except Exception as e:
             if logger:
-                logger.error(f"ClearVoice TSE separation failed: {e}")
+                logger.error(f"Metis TSE separation failed: {e}")
             return mixed_audio
+        finally:
+            for path in (mix_path, ref_path):
+                if path and os.path.exists(path):
+                    os.remove(path)
 
 
 @time_logger
@@ -309,26 +388,28 @@ def identify_speaker_with_embedding(audio_segment, sample_rate, reference_embedd
 def process_overlapping_segments_with_separation(segment_list, audio, overlap_threshold=1.0,
                                                  separator=None, embedding_model=None, device="cuda"):
     """
-    Process overlapping segments by separating them with SepReformer.
+    Process overlapping segments by separating them with blind separation or TSE.
     [Updated] Matches the volume of separated audio to the original overlap audio to prevent volume jumps.
 
     Args:
         segment_list: List of segments
         audio: Audio dictionary
         overlap_threshold: Overlap threshold
-        separator: Pre-loaded SepReformerSeparator object
-        embedding_model: Pre-loaded pyannote embedding model
+        separator: Pre-loaded separator object
+        embedding_model: Pre-loaded pyannote embedding model for blind separation
         device: torch device (cuda/cpu)
     """
     if separator is None:
-        logger.warning("SepReformer separator not provided, skipping separation")
+        logger.warning("Separator not provided, skipping separation")
         return audio, segment_list
 
-    if embedding_model is None:
-        logger.warning("Embedding model not provided, skipping separation")
+    is_tse_separator = getattr(separator, 'is_tse', False)
+    if embedding_model is None and not is_tse_separator:
+        logger.warning("Embedding model not provided for blind separation, skipping separation")
         return audio, segment_list
 
-    logger.info(f"Processing overlapping segments with SepReformer (threshold: {overlap_threshold}s)")
+    separator_name = "TSE" if is_tse_separator else "SepReformer"
+    logger.info(f"Processing overlapping segments with {separator_name} (threshold: {overlap_threshold}s)")
 
     # -------------------------------------------------------------------------
     # [Added] Volume matching helper functions
@@ -460,15 +541,14 @@ def process_overlapping_segments_with_separation(segment_list, audio, overlap_th
                 start_frame = int(seg['start'] * sample_rate)
                 end_frame = int(seg['end'] * sample_rate)
                 seg_audio = waveform[start_frame:end_frame]
-                if sample_rate != 16000:
-                    seg_audio_16k = librosa.resample(seg_audio, orig_sr=sample_rate, target_sr=16000)
-                else:
-                    seg_audio_16k = seg_audio
-                
-                # STORE REFERENCE AUDIO FOR TSE
-                reference_audios[speaker] = seg_audio_16k
+                # Store original-rate clean audio as the TSE prompt. Embeddings use 16 kHz separately.
+                reference_audios[speaker] = seg_audio
                 
                 if embedding_model is not None:
+                    if sample_rate != 16000:
+                        seg_audio_16k = librosa.resample(seg_audio, orig_sr=sample_rate, target_sr=16000)
+                    else:
+                        seg_audio_16k = seg_audio
                     seg_tensor = torch.tensor(seg_audio_16k, dtype=torch.float32).unsqueeze(0).to(device)
                     with torch.inference_mode():
                         embedding = embedding_model(seg_tensor)
@@ -490,8 +570,8 @@ def process_overlapping_segments_with_separation(segment_list, audio, overlap_th
         end_frame = int(overlap_end * sample_rate)
         overlap_audio = waveform[start_frame:end_frame]
 
-        if getattr(separator, 'is_tse', False):
-            # TARGET SPEAKER EXTRACTION (ClearVoice)
+        if is_tse_separator:
+            # TARGET SPEAKER EXTRACTION
             ref_audio1 = reference_audios.get(seg1_speaker)
             ref_audio2 = reference_audios.get(seg2_speaker)
             

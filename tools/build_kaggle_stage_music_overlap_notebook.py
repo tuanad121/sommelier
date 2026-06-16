@@ -35,7 +35,7 @@ def main() -> None:
 
             Notebook này dùng output từ stage 01 diarization đã chạy trước đó, rồi chỉ chạy:
             - Stage 02: phát hiện/loại background music bằng PANNs + Demucs.
-            - Stage 03: tách overlap bằng ClearVoice/MossFormer2 Target Speaker Extraction.
+            - Stage 03: tách overlap bằng Metis-TSE Target Speaker Extraction.
 
             Không chạy lại speaker diarization, không chạy ASR, không tạo HTML.
             """
@@ -64,6 +64,11 @@ def main() -> None:
             DIARIZATION_JSON_PATH = "/kaggle/working/sommelier_batch_outputs/diarization_only_runs/run_full_YOUR_AUDIO/01_diarization/diarization.json"
             AUDIO_WAV_PATH = "/kaggle/working/sommelier_batch_outputs/diarization_only_runs/run_full_YOUR_AUDIO/00_input/full.wav"
 
+            # Optional. Để "" thì notebook tự chọn:
+            # - Nếu input là run_full_* writable trong /kaggle/working: ghi tiếp vào run đó.
+            # - Nếu input nằm trong /kaggle/input hoặc folder upload read-only: ghi vào OUTPUT_ROOT/stage23_<audio>.
+            OUTPUT_RUN_DIR = ""
+
             # =========================
             # 2. Kaggle paths
             # =========================
@@ -83,15 +88,21 @@ def main() -> None:
             PRINT_NVIDIA_SMI = True
 
             RUN_DEMUCS = True
-            RUN_CLEARVOICE_TSE = True
+            RUN_METIS_TSE = True
             OVERLAP_THRESHOLD = 1.0
             DEMUCS_PADDING = 0.5
             DEMUCS_MODEL_NAME = "htdemucs"
+            METIS_REPO_URL = "https://github.com/open-mmlab/Amphion.git"
+            METIS_REPO_DIR = Path("/kaggle/working/Amphion")
+            METIS_FORCE_RECLONE = False
+            METIS_CKPT_DIR = METIS_REPO_DIR / "models/tts/metis/ckpt"
+            METIS_N_TIMESTEPS = 10
+            METIS_GUIDANCE_CFG = 0.0
 
             # Kaggle 1x GPU: dùng 0. Dùng -1 để ép CPU.
             PANNS_DEVICE_INDEX = 0
             DEMUCS_DEVICE_INDEX = 0
-            CLEARVOICE_DEVICE_INDEX = 0
+            METIS_DEVICE_INDEX = 0
 
             # =========================
             # 4. Pinned package versions
@@ -115,9 +126,25 @@ def main() -> None:
                 "PyYAML==6.0.2",
                 "demucs==4.0.1",
                 "panns-inference",
-                "transformers",
-                "clearvoice==0.1.2",
-                "modelscope",
+                "transformers==4.41.2",
+                "accelerate==0.24.1",
+                "safetensors",
+                "peft",
+                "scipy==1.12.0",
+                "json5",
+                "ruamel.yaml",
+                "langid",
+                "unidecode",
+                "encodec",
+                "onnxruntime",
+                "phonemizer",
+                "g2p_en",
+                "jieba",
+                "cn2an",
+                "pypinyin",
+                "LangSegment",
+                "pyopenjtalk",
+                "pykakasi",
             ]
 
             # =========================
@@ -132,12 +159,31 @@ def main() -> None:
             if not AUDIO_WAV_PATH or "YOUR_AUDIO" in AUDIO_WAV_PATH:
                 raise FileNotFoundError(f"Hãy sửa AUDIO_WAV_PATH thành đường dẫn đúng: {AUDIO_WAV_PATH}")
 
-            RUN_DIR = FULL_AUDIO_PATH.parents[1]
-            if DIARIZATION_JSON.parents[1] != RUN_DIR:
-                raise ValueError(
-                    "DIARIZATION_JSON_PATH và AUDIO_WAV_PATH phải thuộc cùng một run_full_* folder. "
-                    f"Got diarization run={DIARIZATION_JSON.parents[1]}, audio run={RUN_DIR}"
-                )
+            import re
+
+            def safe_stem(path):
+                stem = Path(path).stem
+                stem = re.sub(r"[^A-Za-z0-9_.-]+", "_", stem).strip("._")
+                return (stem or "audio")[:80]
+
+            def is_writable_stage1_run_dir(audio_path, diarization_path):
+                audio_path = Path(audio_path)
+                diarization_path = Path(diarization_path)
+                if audio_path.parent.name != "00_input" or diarization_path.parent.name != "01_diarization":
+                    return False
+                if audio_path.parents[1] != diarization_path.parents[1]:
+                    return False
+                candidate = audio_path.parents[1]
+                if str(candidate).startswith("/kaggle/input"):
+                    return False
+                return True
+
+            if OUTPUT_RUN_DIR:
+                RUN_DIR = Path(OUTPUT_RUN_DIR)
+            elif is_writable_stage1_run_dir(FULL_AUDIO_PATH, DIARIZATION_JSON):
+                RUN_DIR = FULL_AUDIO_PATH.parents[1]
+            else:
+                RUN_DIR = OUTPUT_ROOT / f"stage23_{safe_stem(FULL_AUDIO_PATH)}"
             MUSIC_JSON = RUN_DIR / "02_music_clean" / "segment_flags.json"
             CLEANED_AUDIO_PATH = RUN_DIR / "02_music_clean" / "cleaned_audio.wav"
             OVERLAP_JSON = RUN_DIR / "03_overlap" / "segments.json"
@@ -148,13 +194,15 @@ def main() -> None:
             print("DIARIZATION_JSON =", DIARIZATION_JSON)
             print("FULL_AUDIO_PATH =", FULL_AUDIO_PATH)
             print("RUN_DEMUCS =", RUN_DEMUCS)
-            print("RUN_CLEARVOICE_TSE =", RUN_CLEARVOICE_TSE)
+            print("RUN_METIS_TSE =", RUN_METIS_TSE)
             print("OVERLAP_THRESHOLD =", OVERLAP_THRESHOLD)
+            print("METIS_REPO_DIR =", METIS_REPO_DIR)
+            print("METIS_CKPT_DIR =", METIS_CKPT_DIR)
             print("Expected outputs: 02_music_clean/segment_flags.json, 02_music_clean/cleaned_audio.wav, 03_overlap/segments.json")
             print("Device indices:")
             print("  panns =", PANNS_DEVICE_INDEX)
             print("  demucs =", DEMUCS_DEVICE_INDEX)
-            print("  clearvoice =", CLEARVOICE_DEVICE_INDEX)
+            print("  metis =", METIS_DEVICE_INDEX)
             """
         ),
         md("## 1. Helper chạy lệnh và thiết lập GPU"),
@@ -243,6 +291,7 @@ def main() -> None:
             """
             import importlib
             import os
+            import shutil
             from pathlib import Path
 
             os.chdir(PIPELINE_DIR)
@@ -262,6 +311,16 @@ def main() -> None:
                 run_logged(["python", "-m", "pip", "install", "--no-cache-dir", "--force-reinstall", NUMPY_PACKAGE, NUMBA_PACKAGE, LLVMLITE_PACKAGE], "07_pip_numpy_numba.log", tail=16)
             else:
                 print("INSTALL_DEPENDENCIES=False, bỏ qua cài dependencies.")
+
+            if RUN_METIS_TSE:
+                if METIS_REPO_DIR.exists() and METIS_FORCE_RECLONE:
+                    shutil.rmtree(METIS_REPO_DIR)
+                if not METIS_REPO_DIR.exists():
+                    run_logged(["git", "clone", "--depth", "1", METIS_REPO_URL, str(METIS_REPO_DIR)], "08_clone_amphion_metis.log", tail=40)
+                else:
+                    print("Metis repo already exists:", METIS_REPO_DIR)
+            else:
+                print("RUN_METIS_TSE=False, bỏ qua clone Amphion.")
 
             def configure_cuda_library_paths():
                 module_names = [
@@ -320,6 +379,11 @@ def main() -> None:
                 "pandas",
                 "numpy",
                 "numba",
+                "safetensors",
+                "peft",
+                "accelerate",
+                "langid",
+                "json5",
             ]:
                 try:
                     if pkg == "torch":
@@ -344,7 +408,7 @@ def main() -> None:
                     name: idx for name, idx in {
                         "panns": PANNS_DEVICE_INDEX,
                         "demucs": DEMUCS_DEVICE_INDEX,
-                        "clearvoice": CLEARVOICE_DEVICE_INDEX,
+                        "metis": METIS_DEVICE_INDEX,
                     }.items()
                     if idx is not None and idx >= visible_gpu_count
                 }
@@ -385,12 +449,12 @@ def main() -> None:
             print("config.json updated:", CONFIG_PATH)
             """
         ),
-        md("## 6. Tải PANNs và chuẩn bị ClearVoice"),
+        md("## 6. Tải PANNs và chuẩn bị Metis-TSE"),
         code(
             """
             import os
             from pathlib import Path
-            from huggingface_hub import hf_hub_download
+            from huggingface_hub import hf_hub_download, snapshot_download
 
             if RUN_DEMUCS:
                 panns_path = hf_hub_download(
@@ -402,10 +466,31 @@ def main() -> None:
             else:
                 print("RUN_DEMUCS=False, bỏ qua tải PANNs")
 
-            if RUN_CLEARVOICE_TSE:
-                print("ClearVoice / MossFormer2 TSE sẽ được tải tự động bởi ModelScope khi chạy pipeline.")
+            if RUN_METIS_TSE:
+                METIS_CKPT_DIR.mkdir(parents=True, exist_ok=True)
+                metis_dir = snapshot_download(
+                    "amphion/metis",
+                    repo_type="model",
+                    local_dir=str(METIS_CKPT_DIR),
+                    allow_patterns=[
+                        "metis_base/model.safetensors",
+                        "metis_tse/metis_tse_lora_32.safetensors",
+                        "metis_tse/metis_tse_lora_32_adapter.safetensors",
+                    ],
+                )
+                maskgct_dir = snapshot_download(
+                    "amphion/MaskGCT",
+                    repo_type="model",
+                    local_dir=str(METIS_CKPT_DIR),
+                    allow_patterns=[
+                        "s2a_model/s2a_model_1layer/model.safetensors",
+                        "s2a_model/s2a_model_full/model.safetensors",
+                    ],
+                )
+                print("Metis checkpoint dir:", metis_dir)
+                print("MaskGCT checkpoint dir:", maskgct_dir)
             else:
-                print("RUN_CLEARVOICE_TSE=False, bỏ qua ClearVoice")
+                print("RUN_METIS_TSE=False, bỏ qua Metis-TSE")
 
             os.chdir(PIPELINE_DIR)
             """
@@ -439,9 +524,13 @@ def main() -> None:
                 "--panns_data_dir", str(PROJECT_ROOT / "panns_data"),
                 "--panns_device_index", str(PANNS_DEVICE_INDEX),
                 "--demucs_device_index", str(DEMUCS_DEVICE_INDEX),
-                "--clearvoice_device_index", str(CLEARVOICE_DEVICE_INDEX),
+                "--metis_repo_dir", str(METIS_REPO_DIR),
+                "--metis_ckpt_dir", str(METIS_CKPT_DIR),
+                "--metis_n_timesteps", str(METIS_N_TIMESTEPS),
+                "--metis_guidance_cfg", str(METIS_GUIDANCE_CFG),
+                "--metis_device_index", str(METIS_DEVICE_INDEX),
                 "--demucs" if RUN_DEMUCS else "--no-demucs",
-                "--clearvoice_tse" if RUN_CLEARVOICE_TSE else "--no-clearvoice_tse",
+                "--metis_tse" if RUN_METIS_TSE else "--no-metis_tse",
             ]
             run_logged(cmd, f"20_stage_02_03_{FULL_AUDIO_PATH.stem}.log", cwd=PIPELINE_DIR, env=os.environ.copy(), tail=80)
             """
