@@ -158,6 +158,7 @@ class StageMusicOverlapOnlyTests(unittest.TestCase):
             self.assertFalse(hasattr(pkgutil, "ImpImporter"))
             separation_utils._ensure_pkgutil_impimporter_compat()
             self.assertIs(pkgutil.ImpImporter, importlib.machinery.FileFinder)
+            self.assertTrue(hasattr(importlib.machinery.FileFinder, "find_module"))
             source = inspect.getsource(separation_utils.MetisTSESeparator.__init__)
             self.assertIn("_ensure_pkgutil_impimporter_compat()", source)
         finally:

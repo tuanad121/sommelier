@@ -29,6 +29,13 @@ def _ensure_pkgutil_impimporter_compat():
     import importlib.machinery
     import pkgutil
 
+    if not hasattr(importlib.machinery.FileFinder, "find_module"):
+        def find_module(self, fullname, path=None):
+            spec = self.find_spec(fullname)
+            return spec.loader if spec else None
+
+        importlib.machinery.FileFinder.find_module = find_module
+
     if not hasattr(pkgutil, "ImpImporter"):
         pkgutil.ImpImporter = importlib.machinery.FileFinder
 
