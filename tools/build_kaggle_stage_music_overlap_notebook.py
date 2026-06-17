@@ -114,6 +114,7 @@ def main() -> None:
             PYTORCH_WHEEL_EXTRA_INDEX_URL = "https://download.pytorch.org/whl/cu126"
             SETUPTOOLS_PACKAGE = "setuptools>=70.0.0"
             PANNS_PACKAGE = "panns-inference"
+            PILLOW_PACKAGE = "pillow==11.3.0"
             NUMPY_PACKAGE = "numpy==1.26.4"
             NUMBA_PACKAGE = "numba==0.61.2"
             LLVMLITE_PACKAGE = "llvmlite==0.44.0"
@@ -129,9 +130,9 @@ def main() -> None:
                 "demucs==4.0.1",
                 PANNS_PACKAGE,
                 "transformers==4.41.2",
-                "accelerate==0.24.1",
+                "accelerate==1.9.0",
                 "safetensors",
-                "peft",
+                "peft==0.16.0",
                 "scipy==1.12.0",
                 "json5",
                 "ruamel.yaml",
@@ -300,7 +301,7 @@ def main() -> None:
 
             if INSTALL_DEPENDENCIES:
                 run_logged(["apt-get", "update", "-y"], "02_apt_update.log", tail=10)
-                run_logged(["apt-get", "install", "-y", "ffmpeg", "git", "git-lfs", "libaio-dev"], "03_apt_install.log", tail=10)
+                run_logged(["apt-get", "install", "-y", "ffmpeg", "git", "git-lfs", "libaio-dev", "espeak-ng", "libespeak-ng1"], "03_apt_install.log", tail=10)
                 run_logged(["python", "-m", "pip", "install", "-U", "pip", SETUPTOOLS_PACKAGE, "wheel", "packaging", "ninja"], "04_pip_base.log", tail=12)
 
                 torch_stack_cmd = ["python", "-m", "pip", "install", "--no-cache-dir", "--force-reinstall"]
@@ -313,6 +314,8 @@ def main() -> None:
                 run_logged(["python", "-m", "pip", "install", "--no-cache-dir", "--force-reinstall", "--no-deps", PANNS_PACKAGE], "07_pip_panns_inference.log", tail=20)
                 run_logged(["python", "-m", "pip", "install", "--no-cache-dir", "--force-reinstall", NUMPY_PACKAGE, NUMBA_PACKAGE, LLVMLITE_PACKAGE], "08_pip_numpy_numba.log", tail=16)
                 run_logged(["python", "-m", "pip", "install", "--no-cache-dir", "--force-reinstall", SETUPTOOLS_PACKAGE], "09_pip_setuptools_py312.log", tail=12)
+                run_logged(["python", "-m", "pip", "uninstall", "-y", "Pillow", "pillow"], "10_pip_pillow_uninstall.log", tail=12)
+                run_logged(["python", "-m", "pip", "install", "--no-cache-dir", "--force-reinstall", PILLOW_PACKAGE], "11_pip_pillow.log", tail=12)
             else:
                 print("INSTALL_DEPENDENCIES=False, bỏ qua cài dependencies.")
 
@@ -373,10 +376,14 @@ def main() -> None:
         md("## 4. Kiểm tra runtime"),
         code(
             """
+            import importlib
             import importlib.metadata as importlib_metadata
             import subprocess
             import torch
             import torchaudio
+            from PIL import ImageText
+            from PIL._typing import _Ink
+            print("Pillow ImageText import OK")
             import torchvision
 
             for pkg in [
@@ -434,6 +441,15 @@ def main() -> None:
             if RUN_DEMUCS:
                 importlib.import_module("panns_inference")
                 print("panns_inference import OK")
+            if RUN_METIS_TSE:
+                from accelerate.utils.memory import clear_device_cache
+                print("accelerate clear_device_cache import OK")
+                importlib.import_module("peft")
+                print("peft import OK")
+                from phonemizer.backend import EspeakBackend
+                if not EspeakBackend.is_available():
+                    raise RuntimeError("espeak-ng is not available for phonemizer. Re-run the dependency cell that installs espeak-ng and libespeak-ng1.")
+                print("espeak-ng available for phonemizer")
             """
         ),
         md("## 5. Gắn Hugging Face token vào config"),
