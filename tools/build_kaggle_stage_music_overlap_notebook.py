@@ -115,6 +115,9 @@ def main() -> None:
             SETUPTOOLS_PACKAGE = "setuptools>=70.0.0"
             PANNS_PACKAGE = "panns-inference"
             PILLOW_PACKAGE = "pillow==11.3.0"
+            TRANSFORMERS_PACKAGE = "transformers==4.51.3"
+            TOKENIZERS_PACKAGE = "tokenizers>=0.21,<0.22"
+            PEFT_PACKAGE = "peft==0.16.0"
             NUMPY_PACKAGE = "numpy==1.26.4"
             NUMBA_PACKAGE = "numba==0.61.2"
             LLVMLITE_PACKAGE = "llvmlite==0.44.0"
@@ -129,10 +132,11 @@ def main() -> None:
                 "PyYAML==6.0.2",
                 "demucs==4.0.1",
                 PANNS_PACKAGE,
-                "transformers==4.41.2",
+                TRANSFORMERS_PACKAGE,
+                TOKENIZERS_PACKAGE,
                 "accelerate==1.9.0",
                 "safetensors",
-                "peft==0.16.0",
+                PEFT_PACKAGE,
                 "scipy==1.12.0",
                 "json5",
                 "ruamel.yaml",
@@ -408,6 +412,19 @@ def main() -> None:
             print("Pillow image modules import OK")
             import torchvision
 
+            def clear_import_prefixes(*prefixes):
+                for module_name in list(sys.modules):
+                    if module_name in prefixes or any(module_name.startswith(prefix + ".") for prefix in prefixes):
+                        del sys.modules[module_name]
+
+            def install_python_packages(packages, log_name, install_args=None, tail=30):
+                cmd = [sys.executable, "-m", "pip", "install", "--no-cache-dir", "--force-reinstall"]
+                if install_args:
+                    cmd.extend(install_args)
+                cmd.extend(packages)
+                run_logged(cmd, log_name, tail=tail)
+                importlib.invalidate_caches()
+
             def ensure_python_module(module_name, package_name, log_name, install_args=None):
                 try:
                     return importlib.import_module(module_name)
@@ -415,13 +432,26 @@ def main() -> None:
                     if exc.name != module_name:
                         raise
                     print(f"{module_name} missing, reinstalling {package_name}")
-                    cmd = [sys.executable, "-m", "pip", "install", "--no-cache-dir", "--force-reinstall"]
-                    if install_args:
-                        cmd.extend(install_args)
-                    cmd.append(package_name)
-                    run_logged(cmd, log_name, tail=30)
-                    importlib.invalidate_caches()
+                    install_python_packages([package_name], log_name, install_args=install_args)
+                    clear_import_prefixes(module_name)
                     return importlib.import_module(module_name)
+
+            def ensure_peft_stack():
+                try:
+                    from transformers import EncoderDecoderCache
+                    print("transformers EncoderDecoderCache import OK")
+                    importlib.import_module("peft")
+                    print("peft import OK")
+                    return
+                except (ImportError, ModuleNotFoundError) as exc:
+                    print(f"transformers/peft import failed: {exc}")
+                    print("Reinstalling compatible transformers/tokenizers/peft stack")
+                    install_python_packages([TRANSFORMERS_PACKAGE, TOKENIZERS_PACKAGE, PEFT_PACKAGE], "13_pip_transformers_peft_runtime.log", install_args=["--no-deps"], tail=40)
+                    clear_import_prefixes("transformers", "tokenizers", "peft")
+                    from transformers import EncoderDecoderCache
+                    print("transformers EncoderDecoderCache import OK")
+                    importlib.import_module("peft")
+                    print("peft import OK")
 
             if RUN_DEMUCS:
                 ensure_python_module("panns_inference", PANNS_PACKAGE, "12_pip_panns_inference_runtime.log", install_args=["--no-deps"])
@@ -481,8 +511,7 @@ def main() -> None:
             if RUN_METIS_TSE:
                 from accelerate.utils.memory import clear_device_cache
                 print("accelerate clear_device_cache import OK")
-                importlib.import_module("peft")
-                print("peft import OK")
+                ensure_peft_stack()
                 from phonemizer.backend import EspeakBackend
                 if not EspeakBackend.is_available():
                     raise RuntimeError("espeak-ng is not available for phonemizer. Re-run the dependency cell that installs espeak-ng and libespeak-ng1.")

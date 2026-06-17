@@ -1,0 +1,2 @@
+2026-06-17 18:38:11,613 - main - DEBUG - Function detect_overlapping_segments took 6.198883056640625e-06 seconds to execute
+2026-06-17 18:38:11,614 - main - DEBUG - Function process_overlapping_segments_with_separation took 0.002811908721923828 seconds to execute

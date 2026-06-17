@@ -140,6 +140,52 @@ class StageMusicOverlapOnlyTests(unittest.TestCase):
         self.assertEqual(len(updated_segments[2]["enhanced_audio"]), 22)
         self.assertEqual(len(updated_segments[3]["enhanced_audio"]), 20)
 
+    def test_overlap_reference_embeddings_use_stage1_weighted_clean_candidates(self):
+        sys.path.insert(0, str(PIPELINE_DIR))
+        sys.modules.setdefault(
+            "librosa",
+            types.SimpleNamespace(resample=lambda audio, orig_sr, target_sr: np.asarray(audio, dtype=np.float32)),
+        )
+        from utils import separation as separation_utils
+
+        class MeanEmbeddingModel:
+            def __call__(self, audio_tensor):
+                mean_value = float(audio_tensor.detach().cpu().numpy().mean())
+                if mean_value < 1.5:
+                    return np.asarray([1.0, 0.0], dtype=np.float32)
+                return np.asarray([0.0, 1.0], dtype=np.float32)
+
+        sample_rate = 10
+        waveform = np.zeros(120, dtype=np.float32)
+        waveform[0:21] = 1.0
+        waveform[40:80] = 2.0
+        waveform[90:115] = 3.0
+        audio = {"waveform": waveform, "sample_rate": sample_rate}
+        segments = [
+            {"index": "00000", "speaker": "SPEAKER_00", "start": 0.0, "end": 2.1},
+            {"index": "00001", "speaker": "SPEAKER_00", "start": 4.0, "end": 8.0},
+            {"index": "00002", "speaker": "SPEAKER_01", "start": 9.0, "end": 11.5},
+        ]
+
+        reference_embeddings, reference_audios, reference_reports = separation_utils._build_reference_speaker_assets(
+            segments,
+            audio,
+            embedding_model=MeanEmbeddingModel(),
+            device="cpu",
+        )
+
+        self.assertIn("SPEAKER_00", reference_embeddings)
+        self.assertIn("SPEAKER_00", reference_audios)
+        self.assertEqual(reference_reports["SPEAKER_00"]["segment_count"], 2)
+        self.assertEqual(reference_reports["SPEAKER_00"]["segments"][0]["start"], 4.0)
+        self.assertEqual(reference_reports["SPEAKER_00"]["segments"][1]["start"], 0.0)
+        np.testing.assert_allclose(reference_audios["SPEAKER_00"], waveform[40:80])
+        np.testing.assert_allclose(
+            reference_embeddings["SPEAKER_00"].detach().cpu().numpy(),
+            np.asarray([0.70710677, 0.70710677], dtype=np.float32),
+            rtol=1e-5,
+        )
+
     def test_metis_import_installs_python312_pkgutil_compatibility(self):
         sys.path.insert(0, str(PIPELINE_DIR))
         sys.modules.setdefault(

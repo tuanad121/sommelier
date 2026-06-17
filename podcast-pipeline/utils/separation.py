@@ -14,6 +14,7 @@ import librosa
 import torch
 from utils.logger import time_logger
 from utils.diarization import detect_overlapping_segments
+from utils.speaker_linking import build_weighted_reference_embedding, select_speaker_reference_candidates
 
 # Logger will be initialized from main module
 logger = None
@@ -459,19 +460,10 @@ def identify_speaker_with_embedding(audio_segment, sample_rate, reference_embedd
         tuple: (best_speaker_label or None, best_similarity_score)
     """
 
-    # Extract embedding from audio segment
-    # Resample to 16kHz if needed (pyannote expects 16kHz)
-    if sample_rate != 16000:
-        audio_16k = librosa.resample(audio_segment, orig_sr=sample_rate, target_sr=16000)
-    else:
-        audio_16k = audio_segment
-
-    # Convert to tensor
-    audio_tensor = torch.tensor(audio_16k, dtype=torch.float32).unsqueeze(0).to(device)
-
-    # Extract embedding
-    with torch.inference_mode():
-        embedding = embedding_model(audio_tensor)
+    embedding = _extract_embedding_from_audio(audio_segment, sample_rate, embedding_model, device)
+    if embedding is None:
+        logger.debug("Speaker identification: no embedding extracted")
+        return None, -1.0
 
     # Compare with reference embeddings using cosine similarity
     best_speaker = None
@@ -479,11 +471,13 @@ def identify_speaker_with_embedding(audio_segment, sample_rate, reference_embedd
 
     for speaker_label in speaker_labels:
         if speaker_label in reference_embeddings:
-            ref_embedding = reference_embeddings[speaker_label]
+            ref_embedding = _as_embedding_tensor(reference_embeddings[speaker_label], device)
+            if ref_embedding is None:
+                continue
             # Cosine similarity
             similarity = torch.nn.functional.cosine_similarity(
-                embedding.mean(dim=1),
-                ref_embedding.mean(dim=1),
+                embedding,
+                ref_embedding,
                 dim=0
             ).item()
 
@@ -493,6 +487,98 @@ def identify_speaker_with_embedding(audio_segment, sample_rate, reference_embedd
 
     logger.debug(f"Speaker identification: {best_speaker} (similarity: {best_similarity:.3f})")
     return best_speaker, best_similarity
+
+
+def _as_embedding_tensor(value, device):
+    if value is None:
+        return None
+    if isinstance(value, torch.Tensor):
+        tensor = value.detach().to(device=device, dtype=torch.float32)
+    else:
+        tensor = torch.as_tensor(value, dtype=torch.float32, device=device)
+    if tensor.numel() == 0:
+        return None
+    if tensor.ndim > 1:
+        tensor = tensor.reshape(-1, tensor.shape[-1]).mean(dim=0)
+    else:
+        tensor = tensor.reshape(-1)
+    norm = torch.linalg.vector_norm(tensor)
+    if not torch.isfinite(norm) or norm.item() == 0.0:
+        return None
+    return tensor / norm
+
+
+def _extract_embedding_from_audio(audio_segment, sample_rate, embedding_model, device):
+    if embedding_model is None:
+        return None
+    if sample_rate != 16000:
+        audio_16k = librosa.resample(audio_segment, orig_sr=sample_rate, target_sr=16000)
+    else:
+        audio_16k = audio_segment
+    if len(audio_16k) == 0:
+        return None
+
+    audio_tensor = torch.as_tensor(audio_16k, dtype=torch.float32, device=device).unsqueeze(0)
+    with torch.inference_mode():
+        embedding = embedding_model(audio_tensor)
+    return _as_embedding_tensor(embedding, device)
+
+
+def _build_reference_speaker_assets(segment_list, audio, embedding_model=None, device="cuda"):
+    import pandas as pd
+
+    waveform = audio["waveform"]
+    sample_rate = audio["sample_rate"]
+    reference_embeddings = {}
+    reference_audios = {}
+    reference_reports = {}
+    speaker_order = list(dict.fromkeys(str(seg["speaker"]) for seg in segment_list))
+
+    frame_rows = [
+        {
+            "speaker": str(seg["speaker"]),
+            "start": float(seg["start"]),
+            "end": float(seg["end"]),
+        }
+        for seg in segment_list
+    ]
+    segments_df = pd.DataFrame(frame_rows)
+
+    for speaker in speaker_order:
+        candidates = select_speaker_reference_candidates(
+            segments_df,
+            speaker,
+            min_segment_duration=2.0,
+        )
+        if not candidates:
+            reference_reports[speaker] = {"segment_count": 0, "quality_weight": 0.0, "segments": []}
+            continue
+
+        reference_candidate = candidates[0]
+        ref_start = int(float(reference_candidate["start"]) * sample_rate)
+        ref_end = int(float(reference_candidate["end"]) * sample_rate)
+        reference_audios[speaker] = waveform[ref_start:ref_end]
+
+        if embedding_model is None:
+            continue
+
+        def embedding_fn(start, end):
+            start_frame = int(float(start) * sample_rate)
+            end_frame = int(float(end) * sample_rate)
+            seg_audio = waveform[start_frame:end_frame]
+            return _extract_embedding_from_audio(seg_audio, sample_rate, embedding_model, device)
+
+        embedding, report = build_weighted_reference_embedding(
+            candidates,
+            embedding_fn=embedding_fn,
+            max_segments_per_speaker=3,
+        )
+        reference_reports[speaker] = report
+        embedding_tensor = _as_embedding_tensor(embedding, device)
+        if embedding_tensor is not None:
+            reference_embeddings[speaker] = embedding_tensor
+
+    return reference_embeddings, reference_audios, reference_reports
 
 
 @time_logger
@@ -638,33 +724,14 @@ def process_overlapping_segments_with_separation(segment_list, audio, overlap_th
 
     logger.info(f"Found {len(overlapping_pairs)} overlapping segment pairs")
 
-    # (Reference Embeddings extraction logic - kept as is)
-    reference_embeddings = {}
-    reference_audios = {}
-    all_speakers = list(set([seg['speaker'] for seg in segment_list]))
-
-    # ... (Reference Embedding extraction - kept as is) ...
-    for speaker in all_speakers:
-        speaker_segments = [seg for seg in segment_list if seg['speaker'] == speaker]
-        for seg in speaker_segments:
-            is_overlapping = any(pair['seg1'] == seg or pair['seg2'] == seg for pair in overlapping_pairs)
-            if not is_overlapping and (seg['end'] - seg['start']) >= 2.0:
-                start_frame = int(seg['start'] * sample_rate)
-                end_frame = int(seg['end'] * sample_rate)
-                seg_audio = waveform[start_frame:end_frame]
-                # Store original-rate clean audio as the TSE prompt. Embeddings use 16 kHz separately.
-                reference_audios[speaker] = seg_audio
-                
-                if embedding_model is not None:
-                    if sample_rate != 16000:
-                        seg_audio_16k = librosa.resample(seg_audio, orig_sr=sample_rate, target_sr=16000)
-                    else:
-                        seg_audio_16k = seg_audio
-                    seg_tensor = torch.tensor(seg_audio_16k, dtype=torch.float32).unsqueeze(0).to(device)
-                    with torch.inference_mode():
-                        embedding = embedding_model(seg_tensor)
-                    reference_embeddings[speaker] = embedding
-                break
+    reference_embeddings, reference_audios, reference_reports = _build_reference_speaker_assets(
+        segment_list,
+        audio,
+        embedding_model=embedding_model,
+        device=device,
+    )
+    for speaker, report in reference_reports.items():
+        logger.debug(f"Reference embedding candidates for {speaker}: {report}")
 
     # 2. Process overlap pairs
     for pair_idx, pair in enumerate(overlapping_pairs):
