@@ -24,6 +24,32 @@ def set_logger(log_instance):
     logger = log_instance
 
 
+def _ensure_pkgutil_impimporter_compat():
+    """Keep legacy pkg_resources imports working on Python 3.12+."""
+    import importlib.machinery
+    import pkgutil
+
+    if not hasattr(pkgutil, "ImpImporter"):
+        pkgutil.ImpImporter = importlib.machinery.FileFinder
+
+
+def _prepend_import_path(path):
+    path = str(Path(path).resolve())
+    sys.path[:] = [item for item in sys.path if str(Path(item).resolve()) != path]
+    sys.path.insert(0, path)
+
+
+def _ensure_metis_repo_layout(repo_dir):
+    entrypoint = Path(repo_dir) / "models" / "tts" / "metis" / "metis.py"
+    if not entrypoint.exists():
+        raise FileNotFoundError(
+            "Metis repo_dir is not a full Amphion checkout. "
+            f"Missing {entrypoint.relative_to(repo_dir)} under {repo_dir}. "
+            "If this directory was created by checkpoint download or a partial clone, "
+            "set METIS_FORCE_RECLONE=True or delete it, then rerun the Kaggle clone/dependency cell."
+        )
+
+
 class SepReformerSeparator:
     """
     Class that loads the SepReformer model once and can perform inference multiple times.
@@ -196,6 +222,7 @@ class MetisTSESeparator:
             raise FileNotFoundError(
                 f"Metis repo_dir not found: {repo_dir}. Clone open-mmlab/Amphion first."
             )
+        _ensure_metis_repo_layout(repo_dir)
 
         ckpt_dir = Path(ckpt_dir).expanduser().resolve() if ckpt_dir else repo_dir / "models" / "tts" / "metis" / "ckpt"
         ckpt_dir.mkdir(parents=True, exist_ok=True)
@@ -213,8 +240,7 @@ class MetisTSESeparator:
         cleared_modules = {}
         original_work_dir = os.environ.get("WORK_DIR")
         try:
-            if str(repo_dir) not in sys.path:
-                sys.path.insert(0, str(repo_dir))
+            _prepend_import_path(repo_dir)
             for module_name in list(sys.modules.keys()):
                 if module_name == "models" or module_name.startswith("models.") or module_name == "utils" or module_name.startswith("utils."):
                     cleared_modules[module_name] = sys.modules[module_name]
@@ -222,6 +248,7 @@ class MetisTSESeparator:
 
             os.chdir(repo_dir)
             os.environ["WORK_DIR"] = str(repo_dir)
+            _ensure_pkgutil_impimporter_compat()
             from models.tts.metis.metis import Metis
             from utils.util import load_config
 

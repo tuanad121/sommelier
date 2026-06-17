@@ -112,6 +112,8 @@ def main() -> None:
             TORCHAUDIO_PACKAGE = "torchaudio==2.7.1"
             TORCHVISION_PACKAGE = "torchvision==0.22.1"
             PYTORCH_WHEEL_EXTRA_INDEX_URL = "https://download.pytorch.org/whl/cu126"
+            SETUPTOOLS_PACKAGE = "setuptools>=70.0.0"
+            PANNS_PACKAGE = "panns-inference"
             NUMPY_PACKAGE = "numpy==1.26.4"
             NUMBA_PACKAGE = "numba==0.61.2"
             LLVMLITE_PACKAGE = "llvmlite==0.44.0"
@@ -125,7 +127,7 @@ def main() -> None:
                 "huggingface-hub==0.33.4",
                 "PyYAML==6.0.2",
                 "demucs==4.0.1",
-                "panns-inference",
+                PANNS_PACKAGE,
                 "transformers==4.41.2",
                 "accelerate==0.24.1",
                 "safetensors",
@@ -299,7 +301,7 @@ def main() -> None:
             if INSTALL_DEPENDENCIES:
                 run_logged(["apt-get", "update", "-y"], "02_apt_update.log", tail=10)
                 run_logged(["apt-get", "install", "-y", "ffmpeg", "git", "git-lfs", "libaio-dev"], "03_apt_install.log", tail=10)
-                run_logged(["python", "-m", "pip", "install", "-U", "pip", "setuptools", "wheel", "packaging", "ninja"], "04_pip_base.log", tail=12)
+                run_logged(["python", "-m", "pip", "install", "-U", "pip", SETUPTOOLS_PACKAGE, "wheel", "packaging", "ninja"], "04_pip_base.log", tail=12)
 
                 torch_stack_cmd = ["python", "-m", "pip", "install", "--no-cache-dir", "--force-reinstall"]
                 if PYTORCH_WHEEL_EXTRA_INDEX_URL:
@@ -308,17 +310,27 @@ def main() -> None:
                 run_logged(torch_stack_cmd, "05_pip_torch_stack.log", tail=30)
 
                 run_logged(["python", "-m", "pip", "install", *STAGE23_PACKAGES], "06_pip_stage23_packages.log", tail=30)
-                run_logged(["python", "-m", "pip", "install", "--no-cache-dir", "--force-reinstall", NUMPY_PACKAGE, NUMBA_PACKAGE, LLVMLITE_PACKAGE], "07_pip_numpy_numba.log", tail=16)
+                run_logged(["python", "-m", "pip", "install", "--no-cache-dir", "--force-reinstall", "--no-deps", PANNS_PACKAGE], "07_pip_panns_inference.log", tail=20)
+                run_logged(["python", "-m", "pip", "install", "--no-cache-dir", "--force-reinstall", NUMPY_PACKAGE, NUMBA_PACKAGE, LLVMLITE_PACKAGE], "08_pip_numpy_numba.log", tail=16)
+                run_logged(["python", "-m", "pip", "install", "--no-cache-dir", "--force-reinstall", SETUPTOOLS_PACKAGE], "09_pip_setuptools_py312.log", tail=12)
             else:
                 print("INSTALL_DEPENDENCIES=False, bỏ qua cài dependencies.")
 
+            def is_valid_metis_repo(repo_dir):
+                return (Path(repo_dir) / "models/tts/metis/metis.py").exists()
+
             if RUN_METIS_TSE:
-                if METIS_REPO_DIR.exists() and METIS_FORCE_RECLONE:
+                metis_entrypoint = METIS_REPO_DIR / "models/tts/metis/metis.py"
+                if METIS_REPO_DIR.exists() and (METIS_FORCE_RECLONE or not is_valid_metis_repo(METIS_REPO_DIR)):
+                    print("Removing stale/invalid Metis repo:", METIS_REPO_DIR)
+                    print("Expected Metis entrypoint:", metis_entrypoint)
                     shutil.rmtree(METIS_REPO_DIR)
                 if not METIS_REPO_DIR.exists():
-                    run_logged(["git", "clone", "--depth", "1", METIS_REPO_URL, str(METIS_REPO_DIR)], "08_clone_amphion_metis.log", tail=40)
+                    run_logged(["git", "clone", "--depth", "1", METIS_REPO_URL, str(METIS_REPO_DIR)], "10_clone_amphion_metis.log", tail=40)
                 else:
                     print("Metis repo already exists:", METIS_REPO_DIR)
+                if not is_valid_metis_repo(METIS_REPO_DIR):
+                    raise FileNotFoundError(f"Amphion clone is incomplete, missing: {metis_entrypoint}")
             else:
                 print("RUN_METIS_TSE=False, bỏ qua clone Amphion.")
 
@@ -418,6 +430,10 @@ def main() -> None:
                 raise RuntimeError("REQUIRE_GPU=True nhưng torch.cuda.is_available() = False. Hãy bật Kaggle GPU hoặc đặt REQUIRE_GPU=False.")
             if PRINT_NVIDIA_SMI:
                 subprocess.run(["nvidia-smi"], check=False)
+
+            if RUN_DEMUCS:
+                importlib.import_module("panns_inference")
+                print("panns_inference import OK")
             """
         ),
         md("## 5. Gắn Hugging Face token vào config"),

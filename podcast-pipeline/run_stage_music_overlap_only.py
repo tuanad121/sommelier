@@ -92,7 +92,15 @@ def load_stage1_segments(diarization_json: str | Path) -> list[dict[str, Any]]:
 
 
 def _load_panns_model(args, logger):
-    from panns_inference import AudioTagging
+    try:
+        from panns_inference import AudioTagging
+    except ModuleNotFoundError as exc:
+        if exc.name != "panns_inference":
+            raise
+        raise ModuleNotFoundError(
+            "Missing panns_inference. Install it with `python -m pip install panns-inference` "
+            "or rerun the Kaggle notebook dependency cell before running stage 02."
+        ) from exc
 
     panns_data_dir = Path(args.panns_data_dir) if args.panns_data_dir else PROJECT_ROOT / "panns_data"
     checkpoint_path = panns_data_dir / "Cnn14_mAP=0.431.pth"
