@@ -186,6 +186,38 @@ class StageMusicOverlapOnlyTests(unittest.TestCase):
             rtol=1e-5,
         )
 
+    def test_tse_reference_audio_uses_stage1_pure_chunk_candidates_without_embedding(self):
+        sys.path.insert(0, str(PIPELINE_DIR))
+        sys.modules.setdefault(
+            "librosa",
+            types.SimpleNamespace(resample=lambda audio, orig_sr, target_sr: np.asarray(audio, dtype=np.float32)),
+        )
+        from utils import separation as separation_utils
+
+        sample_rate = 10
+        waveform = np.arange(120, dtype=np.float32)
+        audio = {"waveform": waveform, "sample_rate": sample_rate}
+        segments = [
+            {"index": "00000", "speaker": "SPEAKER_00", "start": 0.0, "end": 6.0},
+            {"index": "00001", "speaker": "SPEAKER_01", "start": 4.0, "end": 4.5},
+            {"index": "00002", "speaker": "SPEAKER_01", "start": 7.0, "end": 9.5},
+        ]
+
+        reference_embeddings, reference_audios, reference_reports = separation_utils._build_reference_speaker_assets(
+            segments,
+            audio,
+            embedding_model=None,
+            device="cpu",
+        )
+
+        self.assertEqual(reference_embeddings, {})
+        self.assertIn("SPEAKER_00", reference_audios)
+        self.assertEqual(reference_reports["SPEAKER_00"]["segment_count"], 1)
+        self.assertEqual(reference_reports["SPEAKER_00"]["segments"][0]["type"], "pure_chunk_long")
+        self.assertEqual(reference_reports["SPEAKER_00"]["segments"][0]["start"], 0.0)
+        self.assertEqual(reference_reports["SPEAKER_00"]["segments"][0]["end"], 4.0)
+        np.testing.assert_allclose(reference_audios["SPEAKER_00"], waveform[0:40])
+
     def test_metis_import_installs_python312_pkgutil_compatibility(self):
         sys.path.insert(0, str(PIPELINE_DIR))
         sys.modules.setdefault(

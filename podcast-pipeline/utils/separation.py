@@ -553,6 +553,20 @@ def _build_reference_speaker_assets(segment_list, audio, embedding_model=None, d
         if not candidates:
             reference_reports[speaker] = {"segment_count": 0, "quality_weight": 0.0, "segments": []}
             continue
+        reference_reports[speaker] = {
+            "segment_count": 1,
+            "quality_weight": round(float(candidates[0].get("weight", 0.0)), 6),
+            "segments": [
+                {
+                    "start": round(float(candidates[0]["start"]), 3),
+                    "end": round(float(candidates[0]["end"]), 3),
+                    "duration": round(float(candidates[0].get("duration", 0.0)), 3),
+                    "type": str(candidates[0].get("type", "unknown")),
+                    "weight": round(float(candidates[0].get("weight", 0.0)), 3),
+                    "overlap_ratio": round(float(candidates[0].get("overlap_ratio", 0.0)), 3),
+                }
+            ],
+        }
 
         reference_candidate = candidates[0]
         ref_start = int(float(reference_candidate["start"]) * sample_rate)
