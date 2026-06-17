@@ -295,45 +295,67 @@ def main() -> None:
             import importlib
             import os
             import shutil
+            import sys
             from pathlib import Path
 
             os.chdir(PIPELINE_DIR)
+            print("Python executable =", sys.executable)
 
             if INSTALL_DEPENDENCIES:
                 run_logged(["apt-get", "update", "-y"], "02_apt_update.log", tail=10)
                 run_logged(["apt-get", "install", "-y", "ffmpeg", "git", "git-lfs", "libaio-dev", "espeak-ng", "libespeak-ng1"], "03_apt_install.log", tail=10)
-                run_logged(["python", "-m", "pip", "install", "-U", "pip", SETUPTOOLS_PACKAGE, "wheel", "packaging", "ninja"], "04_pip_base.log", tail=12)
+                run_logged([sys.executable, "-m", "pip", "install", "-U", "pip", SETUPTOOLS_PACKAGE, "wheel", "packaging", "ninja"], "04_pip_base.log", tail=12)
 
-                torch_stack_cmd = ["python", "-m", "pip", "install", "--no-cache-dir", "--force-reinstall"]
+                torch_stack_cmd = [sys.executable, "-m", "pip", "install", "--no-cache-dir", "--force-reinstall"]
                 if PYTORCH_WHEEL_EXTRA_INDEX_URL:
                     torch_stack_cmd.extend(["--extra-index-url", PYTORCH_WHEEL_EXTRA_INDEX_URL])
                 torch_stack_cmd.extend([TORCH_PACKAGE, TORCHAUDIO_PACKAGE, TORCHVISION_PACKAGE])
                 run_logged(torch_stack_cmd, "05_pip_torch_stack.log", tail=30)
 
-                run_logged(["python", "-m", "pip", "install", *STAGE23_PACKAGES], "06_pip_stage23_packages.log", tail=30)
-                run_logged(["python", "-m", "pip", "install", "--no-cache-dir", "--force-reinstall", "--no-deps", PANNS_PACKAGE], "07_pip_panns_inference.log", tail=20)
-                run_logged(["python", "-m", "pip", "install", "--no-cache-dir", "--force-reinstall", NUMPY_PACKAGE, NUMBA_PACKAGE, LLVMLITE_PACKAGE], "08_pip_numpy_numba.log", tail=16)
-                run_logged(["python", "-m", "pip", "install", "--no-cache-dir", "--force-reinstall", SETUPTOOLS_PACKAGE], "09_pip_setuptools_py312.log", tail=12)
-                run_logged(["python", "-m", "pip", "uninstall", "-y", "Pillow", "pillow"], "10_pip_pillow_uninstall.log", tail=12)
-                run_logged(["python", "-m", "pip", "install", "--no-cache-dir", "--force-reinstall", PILLOW_PACKAGE], "11_pip_pillow.log", tail=12)
+                run_logged([sys.executable, "-m", "pip", "install", *STAGE23_PACKAGES], "06_pip_stage23_packages.log", tail=30)
+                run_logged([sys.executable, "-m", "pip", "install", "--no-cache-dir", "--force-reinstall", "--no-deps", PANNS_PACKAGE], "07_pip_panns_inference.log", tail=20)
+                run_logged([sys.executable, "-m", "pip", "install", "--no-cache-dir", "--force-reinstall", NUMPY_PACKAGE, NUMBA_PACKAGE, LLVMLITE_PACKAGE], "08_pip_numpy_numba.log", tail=16)
+                run_logged([sys.executable, "-m", "pip", "install", "--no-cache-dir", "--force-reinstall", SETUPTOOLS_PACKAGE], "09_pip_setuptools_py312.log", tail=12)
+                run_logged([sys.executable, "-m", "pip", "uninstall", "-y", "Pillow", "pillow"], "10_pip_pillow_uninstall.log", tail=12)
+                run_logged([sys.executable, "-m", "pip", "install", "--no-cache-dir", "--force-reinstall", PILLOW_PACKAGE], "11_pip_pillow.log", tail=12)
             else:
                 print("INSTALL_DEPENDENCIES=False, bỏ qua cài dependencies.")
 
+            def required_metis_paths(repo_dir):
+                repo_dir = Path(repo_dir)
+                return [
+                    repo_dir / "models/tts/metis/metis.py",
+                    repo_dir / "models/tts/metis/audio_tokenizer.py",
+                    repo_dir / "models/tts/metis/config/tse.json",
+                    repo_dir / "models/tts/maskgct/maskgct_utils.py",
+                    repo_dir / "models/tts/maskgct/g2p/g2p_generation.py",
+                ]
+
+            def missing_metis_paths(repo_dir):
+                return [path for path in required_metis_paths(repo_dir) if not path.exists()]
+
             def is_valid_metis_repo(repo_dir):
-                return (Path(repo_dir) / "models/tts/metis/metis.py").exists()
+                return not missing_metis_paths(repo_dir)
 
             if RUN_METIS_TSE:
                 metis_entrypoint = METIS_REPO_DIR / "models/tts/metis/metis.py"
+                missing_paths = missing_metis_paths(METIS_REPO_DIR) if METIS_REPO_DIR.exists() else []
                 if METIS_REPO_DIR.exists() and (METIS_FORCE_RECLONE or not is_valid_metis_repo(METIS_REPO_DIR)):
                     print("Removing stale/invalid Metis repo:", METIS_REPO_DIR)
                     print("Expected Metis entrypoint:", metis_entrypoint)
+                    if missing_paths:
+                        print("Missing Metis repo files:")
+                        for path in missing_paths:
+                            print(" -", path)
                     shutil.rmtree(METIS_REPO_DIR)
                 if not METIS_REPO_DIR.exists():
                     run_logged(["git", "clone", "--depth", "1", METIS_REPO_URL, str(METIS_REPO_DIR)], "10_clone_amphion_metis.log", tail=40)
                 else:
                     print("Metis repo already exists:", METIS_REPO_DIR)
                 if not is_valid_metis_repo(METIS_REPO_DIR):
-                    raise FileNotFoundError(f"Amphion clone is incomplete, missing: {metis_entrypoint}")
+                    missing_paths = missing_metis_paths(METIS_REPO_DIR)
+                    missing_text = "\\n".join(f" - {path}" for path in missing_paths)
+                    raise FileNotFoundError(f"Missing Metis repo files after clone:\\n{missing_text}")
             else:
                 print("RUN_METIS_TSE=False, bỏ qua clone Amphion.")
 
@@ -379,18 +401,36 @@ def main() -> None:
             import importlib
             import importlib.metadata as importlib_metadata
             import subprocess
+            import sys
             import torch
             import torchaudio
-            from PIL import ImageText
-            from PIL._typing import _Ink
-            print("Pillow ImageText import OK")
+            from PIL import Image, ImageDraw, ImageFont
+            print("Pillow image modules import OK")
             import torchvision
+
+            def ensure_python_module(module_name, package_name, log_name, install_args=None):
+                try:
+                    return importlib.import_module(module_name)
+                except ModuleNotFoundError as exc:
+                    if exc.name != module_name:
+                        raise
+                    print(f"{module_name} missing, reinstalling {package_name}")
+                    cmd = [sys.executable, "-m", "pip", "install", "--no-cache-dir", "--force-reinstall"]
+                    if install_args:
+                        cmd.extend(install_args)
+                    cmd.append(package_name)
+                    run_logged(cmd, log_name, tail=30)
+                    importlib.invalidate_caches()
+                    return importlib.import_module(module_name)
+
+            if RUN_DEMUCS:
+                ensure_python_module("panns_inference", PANNS_PACKAGE, "12_pip_panns_inference_runtime.log", install_args=["--no-deps"])
+                print("panns_inference import OK")
 
             for pkg in [
                 "torch",
                 "torchaudio",
                 "torchvision",
-                "pyannote.audio",
                 "demucs",
                 "panns-inference",
                 "librosa",
@@ -438,9 +478,6 @@ def main() -> None:
             if PRINT_NVIDIA_SMI:
                 subprocess.run(["nvidia-smi"], check=False)
 
-            if RUN_DEMUCS:
-                importlib.import_module("panns_inference")
-                print("panns_inference import OK")
             if RUN_METIS_TSE:
                 from accelerate.utils.memory import clear_device_cache
                 print("accelerate clear_device_cache import OK")
@@ -544,8 +581,10 @@ def main() -> None:
         md("## 8. Chạy stage 02 + 03"),
         code(
             """
+            import sys
+
             cmd = [
-                "python", str(PIPELINE_DIR / "run_stage_music_overlap_only.py"),
+                sys.executable, str(PIPELINE_DIR / "run_stage_music_overlap_only.py"),
                 "--audio_path", str(FULL_AUDIO_PATH),
                 "--diarization_json", str(DIARIZATION_JSON),
                 "--output_run_dir", str(RUN_DIR),
