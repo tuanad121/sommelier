@@ -205,6 +205,71 @@ class StageMusicOverlapOnlyTests(unittest.TestCase):
         finally:
             sys.path[:] = original_sys_path
 
+    def test_langsegment_compat_loads_broken_python312_package(self):
+        sys.path.insert(0, str(PIPELINE_DIR))
+        sys.modules.setdefault(
+            "librosa",
+            types.SimpleNamespace(resample=lambda audio, orig_sr, target_sr: np.asarray(audio, dtype=np.float32)),
+        )
+        from utils import separation as separation_utils
+
+        with tempfile.TemporaryDirectory() as tmp:
+            package_dir = Path(tmp) / "LangSegment"
+            package_dir.mkdir()
+            (package_dir / "__init__.py").write_text(
+                "from .LangSegment import LangSegment,getTexts,classify,getCounts,printList,setLangfilters,getLangfilters,setfilters,getfilters\n",
+                encoding="utf-8",
+            )
+            (package_dir / "LangSegment.py").write_text(
+                "\n".join(
+                    [
+                        "filters = []",
+                        "class LangSegment:",
+                        "    pass",
+                        "def getTexts(text):",
+                        "    return [{'lang': 'en', 'text': text}]",
+                        "def classify(text):",
+                        "    return 'en'",
+                        "def getCounts(text):",
+                        "    return {'en': len(text)}",
+                        "def printList(items):",
+                        "    return None",
+                        "def setfilters(items):",
+                        "    global filters; filters = list(items)",
+                        "def getfilters():",
+                        "    return filters",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            original_sys_path = sys.path.copy()
+            original_lang_modules = {
+                name: module for name, module in sys.modules.items() if name == "LangSegment" or name.startswith("LangSegment.")
+            }
+            try:
+                for name in list(original_lang_modules):
+                    del sys.modules[name]
+                sys.path.insert(0, tmp)
+
+                with self.assertRaises(ImportError):
+                    __import__("LangSegment")
+                sys.modules.pop("LangSegment", None)
+
+                separation_utils._ensure_langsegment_compat()
+                import LangSegment
+
+                self.assertTrue(hasattr(LangSegment, "setLangfilters"))
+                self.assertTrue(hasattr(LangSegment, "getLangfilters"))
+                LangSegment.setLangfilters(["en", "zh"])
+                self.assertEqual(LangSegment.getLangfilters(), ["en", "zh"])
+                self.assertEqual(LangSegment.getTexts("hello"), [{"lang": "en", "text": "hello"}])
+            finally:
+                sys.path[:] = original_sys_path
+                for name in [name for name in sys.modules if name == "LangSegment" or name.startswith("LangSegment.")]:
+                    del sys.modules[name]
+                sys.modules.update(original_lang_modules)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -40,6 +40,82 @@ def _ensure_pkgutil_impimporter_compat():
         pkgutil.ImpImporter = importlib.machinery.FileFinder
 
 
+def _alias_langsegment_filters(module):
+    if hasattr(module, "setfilters") and not hasattr(module, "setLangfilters"):
+        module.setLangfilters = module.setfilters
+    if hasattr(module, "getfilters") and not hasattr(module, "getLangfilters"):
+        module.getLangfilters = module.getfilters
+
+
+def _ensure_langsegment_compat():
+    """Handle LangSegment packages that export old alias names from __init__."""
+    import importlib
+    import importlib.machinery
+    import importlib.util
+    import types
+
+    try:
+        module = importlib.import_module("LangSegment")
+    except ImportError as exc:
+        message = str(exc)
+        if "setLangfilters" not in message and "getLangfilters" not in message:
+            raise
+
+        package_spec = importlib.machinery.PathFinder.find_spec("LangSegment", sys.path)
+        if package_spec is None or not package_spec.submodule_search_locations:
+            raise
+
+        package_dir = Path(next(iter(package_spec.submodule_search_locations)))
+        impl_path = package_dir / "LangSegment.py"
+        if not impl_path.exists():
+            raise
+
+        sys.modules.pop("LangSegment", None)
+        sys.modules.pop("LangSegment.LangSegment", None)
+
+        package_module = types.ModuleType("LangSegment")
+        package_module.__file__ = str(package_dir / "__init__.py")
+        package_module.__path__ = [str(package_dir)]
+        package_module.__package__ = "LangSegment"
+        sys.modules["LangSegment"] = package_module
+
+        impl_spec = importlib.util.spec_from_file_location("LangSegment.LangSegment", impl_path)
+        if impl_spec is None or impl_spec.loader is None:
+            sys.modules.pop("LangSegment", None)
+            raise
+
+        impl_module = importlib.util.module_from_spec(impl_spec)
+        sys.modules["LangSegment.LangSegment"] = impl_module
+        try:
+            impl_spec.loader.exec_module(impl_module)
+        except Exception:
+            sys.modules.pop("LangSegment", None)
+            sys.modules.pop("LangSegment.LangSegment", None)
+            raise
+
+        for name in (
+            "LangSegment",
+            "getTexts",
+            "classify",
+            "getCounts",
+            "printList",
+            "setfilters",
+            "getfilters",
+        ):
+            if hasattr(impl_module, name):
+                setattr(package_module, name, getattr(impl_module, name))
+
+        _alias_langsegment_filters(impl_module)
+        _alias_langsegment_filters(package_module)
+        return package_module
+
+    _alias_langsegment_filters(module)
+    submodule = sys.modules.get("LangSegment.LangSegment")
+    if submodule is not None:
+        _alias_langsegment_filters(submodule)
+    return module
+
+
 def _prepend_import_path(path):
     path = str(Path(path).resolve())
     sys.path[:] = [item for item in sys.path if str(Path(item).resolve()) != path]
@@ -256,6 +332,7 @@ class MetisTSESeparator:
             os.chdir(repo_dir)
             os.environ["WORK_DIR"] = str(repo_dir)
             _ensure_pkgutil_impimporter_compat()
+            _ensure_langsegment_compat()
             from models.tts.metis.metis import Metis
             from utils.util import load_config
 
