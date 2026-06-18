@@ -244,6 +244,63 @@ def df_to_list(df: pd.DataFrame) -> list[dict]:
     return records
 
 
+def build_micro_overlap_candidates(
+    raw_segments: list[dict],
+    main_segments: list[dict],
+    *,
+    main_min_duration: float,
+    min_overlap_duration: float = 0.0,
+) -> list[dict]:
+    """
+    Preserve short non-main speaker regions that overlap kept speech segments.
+
+    These candidates are intentionally not promoted to normal transcript/ASR
+    segments. Stage 03 can use them as cleanup hints for the longer target
+    speaker segment.
+    """
+    candidates = []
+    main_ids = {id(segment) for segment in main_segments}
+    min_duration = float(main_min_duration)
+    min_overlap = float(min_overlap_duration)
+
+    for raw_idx, raw in enumerate(raw_segments):
+        raw_start = float(raw["start"])
+        raw_end = float(raw["end"])
+        raw_duration = max(0.0, raw_end - raw_start)
+        if raw_duration <= 0.0 or raw_duration >= min_duration or id(raw) in main_ids:
+            continue
+
+        for target in main_segments:
+            if raw.get("speaker") == target.get("speaker"):
+                continue
+            overlap_start = max(raw_start, float(target["start"]))
+            overlap_end = min(raw_end, float(target["end"]))
+            overlap_duration = overlap_end - overlap_start
+            if overlap_duration <= min_overlap:
+                continue
+
+            candidates.append(
+                {
+                    "index": raw.get("index", f"raw_{raw_idx:05d}"),
+                    "speaker": raw.get("speaker"),
+                    "start": round(raw_start, 3),
+                    "end": round(raw_end, 3),
+                    "duration": round(raw_duration, 3),
+                    "is_speech_segment": False,
+                    "is_overlap_candidate": True,
+                    "target_index": target.get("index"),
+                    "target_speaker": target.get("speaker"),
+                    "target_start": round(float(target["start"]), 3),
+                    "target_end": round(float(target["end"]), 3),
+                    "overlap_start": round(overlap_start, 3),
+                    "overlap_end": round(overlap_end, 3),
+                    "overlap_duration": round(overlap_duration, 3),
+                }
+            )
+
+    return candidates
+
+
 def split_long_segments(segment_list, max_duration=30.0):
     """
     Split segments longer than max_duration based on time.

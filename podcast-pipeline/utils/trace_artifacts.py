@@ -152,17 +152,18 @@ class TraceRunWriter:
         self,
         segments: list[dict[str, Any]],
         *,
+        micro_overlap_candidates: list[dict[str, Any]] | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> Path | None:
         if not self.enabled:
             return None
-        return self._write_json(
-            "01_diarization/diarization.json",
-            {
-                "segments": clean_segments_for_json(segments),
-                "metadata": self._metadata("diarization", metadata),
-            },
-        )
+        payload = {
+            "segments": clean_segments_for_json(segments),
+            "metadata": self._metadata("diarization", metadata),
+        }
+        if micro_overlap_candidates is not None:
+            payload["micro_overlap_candidates"] = clean_segments_for_json(micro_overlap_candidates)
+        return self._write_json("01_diarization/diarization.json", payload)
 
     def write_music_clean(
         self,

@@ -73,6 +73,11 @@ class KaggleStageDiarizationNotebookTests(unittest.TestCase):
         self.assertIn("SORTFORMER_PP_PAD_OFFSET = -0.13", joined)
         self.assertIn("SORTFORMER_PP_MIN_DURATION_ON = 0.28", joined)
         self.assertIn("SORTFORMER_PP_MIN_DURATION_OFF = 0.4", joined)
+        self.assertIn("SORTFORMER_PRESERVE_MICRO_OVERLAPS = True", joined)
+        self.assertIn("SORTFORMER_MICRO_OVERLAP_MIN_DURATION_ON = 0.0", joined)
+        self.assertIn("MICRO_OVERLAP_MIN_DURATION = 0.0", joined)
+        self.assertIn("sortformer_inference_min_duration_on =", joined)
+        self.assertIn("'min_duration_on': sortformer_inference_min_duration_on", joined)
         self.assertIn("SORTFORMER_BATCH_SIZE = 1", joined)
         self.assertIn("SORTFORMER_NUM_WORKERS = 0", joined)
         self.assertIn("sortformer_pp = {", joined)
@@ -85,6 +90,10 @@ class KaggleStageDiarizationNotebookTests(unittest.TestCase):
         self.assertIn("--sortformer-pp-pad-offset", joined)
         self.assertIn("--sortformer-pp-min-duration-on", joined)
         self.assertIn("--sortformer-pp-min-duration-off", joined)
+        self.assertIn("--sortformer-preserve-micro-overlaps", joined)
+        self.assertIn("--no-sortformer-preserve-micro-overlaps", joined)
+        self.assertIn("--sortformer-micro-overlap-min-duration-on", joined)
+        self.assertIn("--micro-overlap-min-duration", joined)
         self.assertIn("--sortformer_batch_size", joined)
         self.assertIn("--sortformer_num_workers", joined)
         self.assertIn("--sortformer_model_name", joined)
@@ -139,6 +148,9 @@ class KaggleStageDiarizationNotebookTests(unittest.TestCase):
         self.assertIn('"SORTFORMER_PP_PAD_OFFSET": "-0.13"', builder)
         self.assertIn('"SORTFORMER_PP_MIN_DURATION_ON": "0.28"', builder)
         self.assertIn('"SORTFORMER_PP_MIN_DURATION_OFF": "0.4"', builder)
+        self.assertIn('"SORTFORMER_PRESERVE_MICRO_OVERLAPS": "True"', builder)
+        self.assertIn('"SORTFORMER_MICRO_OVERLAP_MIN_DURATION_ON": "0.0"', builder)
+        self.assertIn('"MICRO_OVERLAP_MIN_DURATION": "0.0"', builder)
 
 
 if __name__ == "__main__":

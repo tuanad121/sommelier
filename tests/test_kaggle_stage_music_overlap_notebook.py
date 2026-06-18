@@ -16,8 +16,9 @@ class KaggleStageMusicOverlapNotebookTests(unittest.TestCase):
 
         self.assertIn('REPO_URL = "https://github.com/tuanad121/sommelier.git"', joined)
         self.assertIn('BRANCH = "kaggle-gpu"', joined)
-        self.assertIn("DIARIZATION_JSON_PATH =", joined)
-        self.assertIn("AUDIO_WAV_PATH =", joined)
+        self.assertIn('DIARIZATION_JSON_PATH = ""', joined)
+        self.assertIn('AUDIO_WAV_PATH = ""', joined)
+        self.assertNotIn("run_full_YOUR_AUDIO", joined)
         self.assertIn("OUTPUT_RUN_DIR =", joined)
         self.assertIn("DIARIZATION_JSON =", joined)
         self.assertIn("FULL_AUDIO_PATH =", joined)
@@ -144,7 +145,9 @@ class KaggleStageMusicOverlapNotebookTests(unittest.TestCase):
 
         self.assertIn('OUT_PATH = Path("kaggle_notebooks/08_stage_music_overlap_only.ipynb")', generator)
         self.assertIn("run_stage_music_overlap_only.py", generator)
-        self.assertIn("DIARIZATION_JSON_PATH", generator)
+        self.assertIn('DIARIZATION_JSON_PATH = ""', generator)
+        self.assertIn('AUDIO_WAV_PATH = ""', generator)
+        self.assertNotIn("run_full_YOUR_AUDIO", generator)
         self.assertIn("OUTPUT_RUN_DIR", generator)
         self.assertIn("is_writable_stage1_run_dir", generator)
         self.assertIn('str(candidate).startswith("/kaggle/input")', generator)

@@ -146,6 +146,35 @@ class StageDiarizationOnlyTests(unittest.TestCase):
         self.assertIn('parser.add_argument("--sortformer-pp-min-duration-off", type=float, default=0.4', text)
         self.assertNotIn("speaker_embedder.get_embedding", text)
 
+    def test_micro_overlap_candidates_preserve_short_interferers_outside_main_segments(self):
+        from utils.diarization import build_micro_overlap_candidates
+
+        main_segments = [
+            {"index": "00000", "speaker": "SPEAKER_01", "start": 0.0, "end": 5.0},
+        ]
+        raw_segments = [
+            {"index": "00000", "speaker": "SPEAKER_01", "start": 0.0, "end": 5.0},
+            {"index": "raw_00001", "speaker": "SPEAKER_00", "start": 1.0, "end": 1.18},
+            {"index": "raw_00002", "speaker": "SPEAKER_01", "start": 2.0, "end": 2.12},
+            {"index": "raw_00003", "speaker": "SPEAKER_00", "start": 8.0, "end": 8.15},
+        ]
+
+        candidates = build_micro_overlap_candidates(
+            raw_segments,
+            main_segments,
+            main_min_duration=0.28,
+            min_overlap_duration=0.0,
+        )
+
+        self.assertEqual(len(candidates), 1)
+        candidate = candidates[0]
+        self.assertFalse(candidate["is_speech_segment"])
+        self.assertTrue(candidate["is_overlap_candidate"])
+        self.assertEqual(candidate["speaker"], "SPEAKER_00")
+        self.assertEqual(candidate["target_speaker"], "SPEAKER_01")
+        self.assertEqual(candidate["target_index"], "00000")
+        self.assertAlmostEqual(candidate["overlap_duration"], 0.18)
+
     def test_apply_sortformer_streaming_config_sets_v21_cache_parameters(self):
         from utils.stage_diarization import apply_sortformer_streaming_config
 

@@ -140,6 +140,83 @@ class StageMusicOverlapOnlyTests(unittest.TestCase):
         self.assertEqual(len(updated_segments[2]["enhanced_audio"]), 22)
         self.assertEqual(len(updated_segments[3]["enhanced_audio"]), 20)
 
+    def test_tse_suppresses_micro_overlap_candidates_without_exporting_interferer(self):
+        sys.path.insert(0, str(PIPELINE_DIR))
+        sys.modules.setdefault(
+            "librosa",
+            types.SimpleNamespace(resample=lambda audio, orig_sr, target_sr: np.asarray(audio, dtype=np.float32)),
+        )
+        from utils import diarization as diarization_utils
+        from utils import separation as separation_utils
+
+        class DummyLogger:
+            def debug(self, *_args, **_kwargs):
+                pass
+
+            def info(self, *_args, **_kwargs):
+                pass
+
+            def warning(self, *_args, **_kwargs):
+                pass
+
+            def error(self, *_args, **_kwargs):
+                pass
+
+        class DummyTSESeparator:
+            is_tse = True
+
+            def __init__(self):
+                self.calls = []
+
+            def separate_target(self, mixed_audio, reference_audio, sample_rate):
+                self.calls.append((mixed_audio.copy(), reference_audio.copy(), sample_rate))
+                return np.asarray(mixed_audio, dtype=np.float32) * -1.0
+
+        dummy_logger = DummyLogger()
+        separation_utils.set_logger(dummy_logger)
+        diarization_utils.set_logger(dummy_logger)
+
+        sample_rate = 10
+        waveform = np.ones(80, dtype=np.float32)
+        audio = {"waveform": waveform, "sample_rate": sample_rate}
+        segments = [
+            {"index": "00000", "speaker": "SPEAKER_01", "start": 0.0, "end": 5.0},
+        ]
+        micro_candidates = [
+            {
+                "index": "raw_00001",
+                "speaker": "SPEAKER_00",
+                "start": 1.0,
+                "end": 1.2,
+                "target_index": "00000",
+                "target_speaker": "SPEAKER_01",
+                "overlap_start": 1.0,
+                "overlap_end": 1.2,
+                "overlap_duration": 0.2,
+                "is_speech_segment": False,
+                "is_overlap_candidate": True,
+            }
+        ]
+        separator = DummyTSESeparator()
+
+        _audio, updated_segments = separation_utils.process_overlapping_segments_with_separation(
+            segments,
+            audio,
+            overlap_threshold=1.0,
+            separator=separator,
+            embedding_model=None,
+            device="cpu",
+            micro_overlap_candidates=micro_candidates,
+            micro_overlap_padding=0.0,
+        )
+
+        self.assertEqual(len(separator.calls), 1)
+        self.assertEqual(len(updated_segments), 1)
+        self.assertTrue(updated_segments[0]["micro_overlap_suppressed"])
+        self.assertTrue(updated_segments[0]["is_separated"])
+        np.testing.assert_allclose(updated_segments[0]["enhanced_audio"][10:12], np.full(2, -1.0, dtype=np.float32))
+        np.testing.assert_allclose(updated_segments[0]["enhanced_audio"][:10], np.ones(10, dtype=np.float32))
+
     def test_overlap_reference_embeddings_use_stage1_weighted_clean_candidates(self):
         sys.path.insert(0, str(PIPELINE_DIR))
         sys.modules.setdefault(

@@ -524,7 +524,13 @@ def _extract_embedding_from_audio(audio_segment, sample_rate, embedding_model, d
     return _as_embedding_tensor(embedding, device)
 
 
-def _build_reference_speaker_assets(segment_list, audio, embedding_model=None, device="cuda"):
+def _build_reference_speaker_assets(
+    segment_list,
+    audio,
+    embedding_model=None,
+    device="cuda",
+    extra_overlap_segments=None,
+):
     import pandas as pd
 
     waveform = audio["waveform"]
@@ -542,6 +548,14 @@ def _build_reference_speaker_assets(segment_list, audio, embedding_model=None, d
         }
         for seg in segment_list
     ]
+    for seg in extra_overlap_segments or []:
+        frame_rows.append(
+            {
+                "speaker": str(seg.get("speaker", "UNKNOWN_MICRO_OVERLAP")),
+                "start": float(seg["start"]),
+                "end": float(seg["end"]),
+            }
+        )
     segments_df = pd.DataFrame(frame_rows)
 
     for speaker in speaker_order:
@@ -597,7 +611,9 @@ def _build_reference_speaker_assets(segment_list, audio, embedding_model=None, d
 
 @time_logger
 def process_overlapping_segments_with_separation(segment_list, audio, overlap_threshold=1.0,
-                                                 separator=None, embedding_model=None, device="cuda"):
+                                                 separator=None, embedding_model=None, device="cuda",
+                                                 micro_overlap_candidates=None,
+                                                 micro_overlap_padding=0.35):
     """
     Process overlapping segments by separating them with blind separation or TSE.
     [Updated] Matches the volume of separated audio to the original overlap audio to prevent volume jumps.
@@ -620,7 +636,11 @@ def process_overlapping_segments_with_separation(segment_list, audio, overlap_th
         return audio, segment_list
 
     separator_name = "TSE" if is_tse_separator else "SepReformer"
-    logger.info(f"Processing overlapping segments with {separator_name} (threshold: {overlap_threshold}s)")
+    micro_overlap_candidates = list(micro_overlap_candidates or [])
+    logger.info(
+        f"Processing overlapping segments with {separator_name} "
+        f"(threshold: {overlap_threshold}s, micro_candidates: {len(micro_overlap_candidates)})"
+    )
 
     # -------------------------------------------------------------------------
     # [Added] Volume matching helper functions
@@ -732,7 +752,7 @@ def process_overlapping_segments_with_separation(segment_list, audio, overlap_th
     # Detect overlapping segments
     overlapping_pairs = detect_overlapping_segments(segment_list, overlap_threshold)
 
-    if not overlapping_pairs:
+    if not overlapping_pairs and not micro_overlap_candidates:
         logger.info("No overlapping segments found")
         return audio, segment_list
 
@@ -743,6 +763,7 @@ def process_overlapping_segments_with_separation(segment_list, audio, overlap_th
         audio,
         embedding_model=embedding_model,
         device=device,
+        extra_overlap_segments=micro_overlap_candidates,
     )
     for speaker, report in reference_reports.items():
         logger.debug(f"Reference embedding candidates for {speaker}: {report}")
@@ -885,8 +906,91 @@ def process_overlapping_segments_with_separation(segment_list, audio, overlap_th
         })
         seg1['sepreformer'] = True
         seg2['sepreformer'] = True
+        seg1['is_separated'] = True
+        seg2['is_separated'] = True
 
         logger.info(f"  ✓ Stored separated audio for Seg1 and Seg2 (overlap: {overlap_start:.2f}-{overlap_end:.2f})")
+
+    # 2b. Suppress short overlap-only candidates inside the main speaker segment.
+    if micro_overlap_candidates and not is_tse_separator:
+        logger.warning("Micro overlap cleanup requires a TSE separator; skipping micro overlap candidates.")
+
+    if micro_overlap_candidates and is_tse_separator:
+        segment_by_index = {str(seg.get("index")): seg for seg in segment_list if seg.get("index") is not None}
+        padding = max(0.0, float(micro_overlap_padding))
+        audio_start = 0.0
+        audio_end = len(waveform) / sample_rate if sample_rate else 0.0
+
+        def find_target_segment(candidate):
+            target_index = candidate.get("target_index")
+            if target_index is not None and str(target_index) in segment_by_index:
+                return segment_by_index[str(target_index)]
+
+            target_speaker = candidate.get("target_speaker")
+            cand_start = float(candidate.get("overlap_start", candidate.get("start", 0.0)))
+            cand_end = float(candidate.get("overlap_end", candidate.get("end", cand_start)))
+            for segment in segment_list:
+                if target_speaker and str(segment.get("speaker")) != str(target_speaker):
+                    continue
+                if float(segment["start"]) <= cand_start and cand_end <= float(segment["end"]):
+                    return segment
+            return None
+
+        for candidate_idx, candidate in enumerate(micro_overlap_candidates):
+            if not bool(candidate.get("is_overlap_candidate", True)):
+                continue
+            target_seg = find_target_segment(candidate)
+            if target_seg is None:
+                logger.warning(f"  Missing target segment for micro overlap candidate {candidate_idx}, skipping.")
+                continue
+
+            target_speaker = str(candidate.get("target_speaker") or target_seg.get("speaker"))
+            ref_audio = reference_audios.get(target_speaker)
+            if ref_audio is None:
+                logger.warning(f"  Missing reference audio for {target_speaker}, skipping micro overlap cleanup.")
+                continue
+
+            base_start = float(candidate.get("overlap_start", candidate.get("start", target_seg["start"])))
+            base_end = float(candidate.get("overlap_end", candidate.get("end", base_start)))
+            region_start = max(float(target_seg["start"]), audio_start, base_start - padding)
+            region_end = min(float(target_seg["end"]), audio_end, base_end + padding)
+            if region_end <= region_start:
+                continue
+
+            start_frame = int(region_start * sample_rate)
+            end_frame = int(region_end * sample_rate)
+            mixed_region = waveform[start_frame:end_frame]
+            if len(mixed_region) == 0:
+                continue
+
+            logger.info(
+                f"  Cleaning micro overlap for {target_speaker}: "
+                f"{region_start:.2f}-{region_end:.2f} "
+                f"(interferer={candidate.get('speaker')})"
+            )
+            target_part = separator.separate_target(mixed_region, ref_audio, sample_rate)
+            target_part = match_target_amplitude(
+                target_part,
+                get_non_overlap_rms(target_seg, waveform, sample_rate, overlapping_pairs) or np.sqrt(np.mean(mixed_region**2)),
+            )
+
+            if 'separated_regions' not in target_seg:
+                target_seg['separated_regions'] = []
+            target_seg['separated_regions'].append({
+                'start': region_start,
+                'end': region_end,
+                'audio': target_part
+            })
+            target_seg['sepreformer'] = True
+            target_seg['is_separated'] = True
+            target_seg['micro_overlap_suppressed'] = True
+            target_seg.setdefault('micro_overlap_regions', []).append({
+                'start': round(region_start, 3),
+                'end': round(region_end, 3),
+                'interferer_speaker': candidate.get('speaker'),
+                'candidate_start': round(float(candidate.get('start', base_start)), 3),
+                'candidate_end': round(float(candidate.get('end', base_end)), 3),
+            })
 
     # -------------------------------------------------------------------------
     # 3. After processing all overlaps, reconstruct enhanced_audio for each segment

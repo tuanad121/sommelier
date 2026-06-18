@@ -61,8 +61,8 @@ def main() -> None:
             # =========================
             # 1. Stage 01 input files
             # =========================
-            DIARIZATION_JSON_PATH = "/kaggle/working/sommelier_batch_outputs/diarization_only_runs/run_full_YOUR_AUDIO/01_diarization/diarization.json"
-            AUDIO_WAV_PATH = "/kaggle/working/sommelier_batch_outputs/diarization_only_runs/run_full_YOUR_AUDIO/00_input/full.wav"
+            DIARIZATION_JSON_PATH = ""
+            AUDIO_WAV_PATH = ""
 
             # Optional. Để "" thì notebook tự chọn:
             # - Nếu input là run_full_* writable trong /kaggle/working: ghi tiếp vào run đó.

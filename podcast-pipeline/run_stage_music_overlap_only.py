@@ -74,21 +74,49 @@ def resolve_stage1_artifacts(
     return resolved_audio, resolved_diarization
 
 
-def load_stage1_segments(diarization_json: str | Path) -> list[dict[str, Any]]:
+def _normalize_stage1_segment(segment: dict[str, Any], idx: int) -> dict[str, Any]:
+    item = dict(segment)
+    item.setdefault("index", f"{idx:05d}")
+    item["start"] = float(item["start"])
+    item["end"] = float(item["end"])
+    item["speaker"] = str(item.get("speaker", "UNKNOWN"))
+    return item
+
+
+def load_stage1_diarization(diarization_json: str | Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     payload = json.loads(Path(diarization_json).read_text(encoding="utf-8"))
     segments = payload.get("segments")
     if not isinstance(segments, list):
         raise ValueError(f"Invalid diarization JSON: missing list field 'segments' in {diarization_json}")
+    micro_overlap_candidates = payload.get("micro_overlap_candidates", [])
+    if micro_overlap_candidates is None:
+        micro_overlap_candidates = []
+    if not isinstance(micro_overlap_candidates, list):
+        raise ValueError(
+            f"Invalid diarization JSON: field 'micro_overlap_candidates' must be a list in {diarization_json}"
+        )
 
-    normalized: list[dict[str, Any]] = []
-    for idx, segment in enumerate(segments):
-        item = dict(segment)
-        item.setdefault("index", f"{idx:05d}")
-        item["start"] = float(item["start"])
-        item["end"] = float(item["end"])
-        item["speaker"] = str(item.get("speaker", "UNKNOWN"))
-        normalized.append(item)
-    return normalized
+    normalized_segments = [_normalize_stage1_segment(segment, idx) for idx, segment in enumerate(segments)]
+    normalized_candidates = [
+        _normalize_stage1_segment(candidate, idx)
+        for idx, candidate in enumerate(micro_overlap_candidates)
+    ]
+    for candidate in normalized_candidates:
+        for key in ("target_start", "target_end", "overlap_start", "overlap_end", "overlap_duration"):
+            if key in candidate:
+                candidate[key] = float(candidate[key])
+        if "target_index" in candidate:
+            candidate["target_index"] = str(candidate["target_index"])
+        if "target_speaker" in candidate:
+            candidate["target_speaker"] = str(candidate["target_speaker"])
+        candidate["is_speech_segment"] = bool(candidate.get("is_speech_segment", False))
+        candidate["is_overlap_candidate"] = bool(candidate.get("is_overlap_candidate", True))
+    return normalized_segments, normalized_candidates
+
+
+def load_stage1_segments(diarization_json: str | Path) -> list[dict[str, Any]]:
+    segments, _micro_overlap_candidates = load_stage1_diarization(diarization_json)
+    return segments
 
 
 def _load_panns_model(args, logger):
@@ -176,10 +204,11 @@ def process_stage_music_overlap(args) -> Path:
 
     audio = standardization(str(audio_path), cfg)
     audio_duration = len(audio["waveform"]) / audio["sample_rate"] if audio["sample_rate"] else 0.0
-    segment_list = load_stage1_segments(diarization_path)
+    segment_list, micro_overlap_candidates = load_stage1_diarization(diarization_path)
     writer = TraceRunWriter(run_dir, source_audio_path=str(audio_path), logger=logger)
 
     logger.info(f"Loaded {len(segment_list)} diarization segments from stage 01")
+    logger.info(f"Loaded {len(micro_overlap_candidates)} micro overlap candidates from stage 01")
     logger.info("Stage 02: Background music detection/removal")
     music_start = time.time()
     panns_model = _load_panns_model(args, logger) if args.demucs else None
@@ -220,6 +249,8 @@ def process_stage_music_overlap(args) -> Path:
             separator=separator,
             embedding_model=None,
             device=_torch_device_from_index(args.metis_device_index),
+            micro_overlap_candidates=micro_overlap_candidates,
+            micro_overlap_padding=float(args.micro_overlap_padding),
         )
     else:
         logger.info("Metis TSE overlap separation skipped")
@@ -234,6 +265,8 @@ def process_stage_music_overlap(args) -> Path:
             "rt_factor": separation_time / audio_duration if audio_duration > 0 else 0.0,
             "overlap_threshold_seconds": float(args.overlap_threshold),
             "overlap_pair_count": len(overlap_pairs),
+            "micro_overlap_candidate_count": len(micro_overlap_candidates),
+            "micro_overlap_padding_seconds": float(args.micro_overlap_padding),
             "tse_model": "Metis-TSE",
             "metis_repo_dir": args.metis_repo_dir,
             "metis_ckpt_dir": args.metis_ckpt_dir,
@@ -261,6 +294,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--demucs", action=argparse.BooleanOptionalAction, default=True, help="Enable PANNs music detection and Demucs cleaning.")
     parser.add_argument("--metis_tse", action=argparse.BooleanOptionalAction, default=True, help="Enable Metis Target Speaker Extraction.")
     parser.add_argument("--overlap_threshold", type=float, default=1.0, help="Minimum overlap seconds to run TSE on a pair.")
+    parser.add_argument("--micro-overlap-padding", type=float, default=0.35, help="Seconds of context around short overlap candidates when cleaning the target speaker.")
     parser.add_argument("--demucs_padding", type=float, default=0.5, help="Seconds of context around each segment for music detection/cleaning.")
     parser.add_argument("--demucs_model_name", type=str, default="htdemucs", help="Demucs model name.")
     parser.add_argument("--panns_data_dir", type=str, default="", help="Folder containing Cnn14_mAP=0.431.pth.")

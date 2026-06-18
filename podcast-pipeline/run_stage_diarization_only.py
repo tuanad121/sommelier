@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import os
 import shutil
 import subprocess
@@ -25,6 +26,7 @@ from utils.audio_preprocessing import (
     standardization,
 )
 from utils.diarization import (
+    build_micro_overlap_candidates,
     df_to_list,
     set_logger as set_diarization_logger,
     sortformer_dia,
@@ -325,7 +327,16 @@ def process_audio(
         run_dir = build_run_dir(Path(args.output_root), audio_path)
         trace_writer = TraceRunWriter(run_dir, source_audio_path=audio_path, logger=logger)
         write_input_artifacts(run_dir, audio, diar_chunks)
-        sortformer_postprocessing_yaml_path = resolve_sortformer_postprocessing_yaml(args, run_dir)
+        sortformer_postprocessing_args = args
+        if (
+            bool(getattr(args, "sortformer_preserve_micro_overlaps", False))
+            and not str(getattr(args, "sortformer_postprocessing_yaml", "") or "").strip()
+        ):
+            sortformer_postprocessing_args = copy.copy(args)
+            sortformer_postprocessing_args.sortformer_pp_min_duration_on = float(
+                args.sortformer_micro_overlap_min_duration_on
+            )
+        sortformer_postprocessing_yaml_path = resolve_sortformer_postprocessing_yaml(sortformer_postprocessing_args, run_dir)
         sortformer_postprocessing_yaml = (
             str(sortformer_postprocessing_yaml_path) if sortformer_postprocessing_yaml_path else None
         )
@@ -370,11 +381,25 @@ def process_audio(
         else:
             speakerdia = pd.DataFrame(columns=["segment", "label", "speaker", "start", "end"])
 
-        segment_list = split_long_segments(df_to_list(speakerdia))
+        raw_segment_list = df_to_list(speakerdia)
+        main_min_duration = float(args.sortformer_pp_min_duration_on)
+        main_segment_list = [
+            segment
+            for segment in raw_segment_list
+            if float(segment["end"]) - float(segment["start"]) >= main_min_duration
+        ]
+        segment_list = split_long_segments(main_segment_list)
+        micro_overlap_candidates = build_micro_overlap_candidates(
+            raw_segment_list,
+            segment_list,
+            main_min_duration=main_min_duration,
+            min_overlap_duration=float(args.micro_overlap_min_duration),
+        )
         dia_end = time.time()
         rt = (dia_end - dia_start) / audio_duration if audio_duration > 0 else 0.0
         trace_writer.write_diarization(
             segment_list,
+            micro_overlap_candidates=micro_overlap_candidates,
             metadata={
                 "audio_path": audio_path,
                 "audio_duration_seconds": audio_duration,
@@ -400,6 +425,13 @@ def process_audio(
                 "sortformer_pp_pad_offset": float(args.sortformer_pp_pad_offset),
                 "sortformer_pp_min_duration_on": float(args.sortformer_pp_min_duration_on),
                 "sortformer_pp_min_duration_off": float(args.sortformer_pp_min_duration_off),
+                "sortformer_inference_min_duration_on": float(
+                    getattr(sortformer_postprocessing_args, "sortformer_pp_min_duration_on", args.sortformer_pp_min_duration_on)
+                ),
+                "sortformer_preserve_micro_overlaps": bool(args.sortformer_preserve_micro_overlaps),
+                "sortformer_micro_overlap_min_duration_on": float(args.sortformer_micro_overlap_min_duration_on),
+                "micro_overlap_min_duration": float(args.micro_overlap_min_duration),
+                "micro_overlap_candidate_count": len(micro_overlap_candidates),
                 "sortformer_batch_size": int(args.sortformer_batch_size),
                 "sortformer_num_workers": int(args.sortformer_num_workers),
                 "sortformer_pad_onset": float(args.sortformer_pad_onset),
@@ -447,6 +479,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sortformer-pp-pad-offset", type=float, default=-0.13, help="NeMo postprocessing seconds added after segment end.")
     parser.add_argument("--sortformer-pp-min-duration-on", type=float, default=0.28, help="NeMo postprocessing minimum speech segment duration.")
     parser.add_argument("--sortformer-pp-min-duration-off", type=float, default=0.4, help="NeMo postprocessing minimum non-speech duration before keeping a split.")
+    parser.add_argument("--sortformer-preserve-micro-overlaps", action=argparse.BooleanOptionalAction, default=True, help="Ask Sortformer postprocessing to keep very short speech so Python can mark overlap-only candidates without exporting them as transcript segments.")
+    parser.add_argument("--sortformer-micro-overlap-min-duration-on", type=float, default=0.0, help="NeMo min_duration_on used only while preserving micro overlap candidates.")
+    parser.add_argument("--micro-overlap-min-duration", type=float, default=0.0, help="Minimum short-speaker overlap seconds to keep as a cleanup candidate.")
     parser.add_argument("--sortformer-param", dest="sortformer_param", action=argparse.BooleanOptionalAction, default=False, help="Enable post-hoc boundary padding for Sortformer output.")
     parser.add_argument("--sortformer-pad-offset", type=float, default=-0.24, help="Seconds added to segment end.")
     parser.add_argument("--sortformer-pad-onset", type=float, default=0.0, help="Seconds added to segment start.")
