@@ -115,9 +115,10 @@ def main() -> None:
             SETUPTOOLS_PACKAGE = "setuptools>=70.0.0"
             PANNS_PACKAGE = "panns-inference"
             PILLOW_PACKAGE = "pillow==11.3.0"
-            TRANSFORMERS_PACKAGE = "transformers==4.51.3"
-            TOKENIZERS_PACKAGE = "tokenizers>=0.21,<0.22"
-            PEFT_PACKAGE = "peft==0.16.0"
+            TRANSFORMERS_PACKAGE = "transformers==4.41.2"
+            TOKENIZERS_PACKAGE = "tokenizers>=0.19,<0.20"
+            ACCELERATE_PACKAGE = "accelerate==0.24.1"
+            PEFT_PACKAGE = "peft==0.13.2"
             NUMPY_PACKAGE = "numpy==1.26.4"
             NUMBA_PACKAGE = "numba==0.61.2"
             LLVMLITE_PACKAGE = "llvmlite==0.44.0"
@@ -134,7 +135,7 @@ def main() -> None:
                 PANNS_PACKAGE,
                 TRANSFORMERS_PACKAGE,
                 TOKENIZERS_PACKAGE,
-                "accelerate==1.9.0",
+                ACCELERATE_PACKAGE,
                 "safetensors",
                 PEFT_PACKAGE,
                 "scipy==1.12.0",
@@ -438,20 +439,24 @@ def main() -> None:
 
             def ensure_peft_stack():
                 try:
-                    from transformers import EncoderDecoderCache
-                    print("transformers EncoderDecoderCache import OK")
+                    importlib.import_module("transformers")
+                    print("transformers import OK")
                     importlib.import_module("peft")
                     print("peft import OK")
+                    from peft import LoraConfig, LoraModel
+                    print("peft LoraModel import OK")
                     return
                 except (ImportError, ModuleNotFoundError) as exc:
                     print(f"transformers/peft import failed: {exc}")
-                    print("Reinstalling compatible transformers/tokenizers/peft stack")
-                    install_python_packages([TRANSFORMERS_PACKAGE, TOKENIZERS_PACKAGE, PEFT_PACKAGE], "13_pip_transformers_peft_runtime.log", install_args=["--no-deps"], tail=40)
-                    clear_import_prefixes("transformers", "tokenizers", "peft")
-                    from transformers import EncoderDecoderCache
-                    print("transformers EncoderDecoderCache import OK")
+                    print("Reinstalling Amphion/Metis-compatible transformers/tokenizers/accelerate/peft stack")
+                    install_python_packages([TRANSFORMERS_PACKAGE, TOKENIZERS_PACKAGE, ACCELERATE_PACKAGE, PEFT_PACKAGE], "13_pip_metis_dependency_stack_runtime.log", install_args=["--no-deps"], tail=40)
+                    clear_import_prefixes("transformers", "tokenizers", "accelerate", "peft")
+                    importlib.import_module("transformers")
+                    print("transformers import OK")
                     importlib.import_module("peft")
                     print("peft import OK")
+                    from peft import LoraConfig, LoraModel
+                    print("peft LoraModel import OK")
 
             if RUN_DEMUCS:
                 ensure_python_module("panns_inference", PANNS_PACKAGE, "12_pip_panns_inference_runtime.log", install_args=["--no-deps"])
@@ -509,8 +514,6 @@ def main() -> None:
                 subprocess.run(["nvidia-smi"], check=False)
 
             if RUN_METIS_TSE:
-                from accelerate.utils.memory import clear_device_cache
-                print("accelerate clear_device_cache import OK")
                 ensure_peft_stack()
                 from phonemizer.backend import EspeakBackend
                 if not EspeakBackend.is_available():
