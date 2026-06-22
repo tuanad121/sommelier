@@ -1,0 +1,69 @@
+{
+  "segments": [
+    {
+      "index": "00000",
+      "start": 0.0,
+      "end": 17.59,
+      "speaker": "SPEAKER_00"
+    },
+    {
+      "index": "00001",
+      "start": 2.86,
+      "end": 3.19,
+      "speaker": "SPEAKER_01"
+    },
+    {
+      "index": "00002",
+      "start": 17.66,
+      "end": 31.83,
+      "speaker": "SPEAKER_01"
+    },
+    {
+      "index": "00003",
+      "start": 31.02,
+      "end": 32.79,
+      "speaker": "SPEAKER_00"
+    },
+    {
+      "index": "00004",
+      "start": 32.94,
+      "end": 62.94,
+      "speaker": "SPEAKER_01"
+    },
+    {
+      "index": "00005",
+      "start": 62.94,
+      "end": 69.58,
+      "speaker": "SPEAKER_01"
+    },
+    {
+      "index": "00006",
+      "start": 50.14,
+      "end": 50.47,
+      "speaker": "SPEAKER_00"
+    }
+  ],
+  "segment_demucs_flags": [
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+  ],
+  "audio_path": "02_music_clean/cleaned_audio.wav",
+  "metadata": {
+    "stage": "music_clean",
+    "trace": true,
+    "proxy": false,
+    "source_audio_path": "/kaggle/input/datasets/kieuduclamk18hl/data-livestream-separation/full (1).wav",
+    "enabled": true,
+    "demucs_applied_count": 0,
+    "total_segments": 7,
+    "processing_time_seconds": 8.535183191299438,
+    "rt_factor": 0.12245599987517128,
+    "demucs_padding_seconds": 0.5,
+    "demucs_model_name": "htdemucs"
+  }
+}

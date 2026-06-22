@@ -1,0 +1,82 @@
+{
+  "segments": [
+    {
+      "index": "00000",
+      "start": 0.0,
+      "end": 17.59,
+      "speaker": "SPEAKER_00",
+      "sepreformer": true,
+      "enhanced_audio_path": "03_overlap/separated_segments/00000_SPEAKER_00.wav",
+      "is_separated": true
+    },
+    {
+      "index": "00001",
+      "start": 2.86,
+      "end": 3.19,
+      "speaker": "SPEAKER_01",
+      "sepreformer": true,
+      "enhanced_audio_path": "03_overlap/separated_segments/00001_SPEAKER_01.wav",
+      "is_separated": true
+    },
+    {
+      "index": "00002",
+      "start": 17.66,
+      "end": 31.83,
+      "speaker": "SPEAKER_01",
+      "sepreformer": true,
+      "enhanced_audio_path": "03_overlap/separated_segments/00002_SPEAKER_01.wav",
+      "is_separated": true
+    },
+    {
+      "index": "00003",
+      "start": 31.02,
+      "end": 32.79,
+      "speaker": "SPEAKER_00",
+      "sepreformer": true,
+      "enhanced_audio_path": "03_overlap/separated_segments/00003_SPEAKER_00.wav",
+      "is_separated": true
+    },
+    {
+      "index": "00004",
+      "start": 32.94,
+      "end": 62.94,
+      "speaker": "SPEAKER_01",
+      "sepreformer": true,
+      "enhanced_audio_path": "03_overlap/separated_segments/00004_SPEAKER_01.wav",
+      "is_separated": true
+    },
+    {
+      "index": "00005",
+      "start": 62.94,
+      "end": 69.58,
+      "speaker": "SPEAKER_01",
+      "sepreformer": false,
+      "enhanced_audio_path": "03_overlap/separated_segments/00005_SPEAKER_01.wav",
+      "is_separated": true
+    },
+    {
+      "index": "00006",
+      "start": 50.14,
+      "end": 50.47,
+      "speaker": "SPEAKER_00",
+      "sepreformer": true,
+      "enhanced_audio_path": "03_overlap/separated_segments/00006_SPEAKER_00.wav",
+      "is_separated": true
+    }
+  ],
+  "audio_path": "02_music_clean/cleaned_audio.wav",
+  "metadata": {
+    "stage": "overlap_separation",
+    "trace": true,
+    "proxy": false,
+    "source_audio_path": "/kaggle/input/datasets/thuhinl123/data-1/full (1).wav",
+    "enabled": true,
+    "separator_available": true,
+    "embedding_model_available": true,
+    "processing_time_seconds": 9.508171319961548,
+    "rt_factor": 0.1364156573882575,
+    "overlap_threshold_seconds": 0.2,
+    "overlap_pair_count": 3,
+    "separated_segments": 6
+  }
+}
