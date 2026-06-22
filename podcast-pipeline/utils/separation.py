@@ -443,100 +443,6 @@ class MetisTSESeparator:
                     os.remove(path)
 
 
-class SRCorrNetSeparator:
-    """
-    Class that loads the SR-CorrNet-SS model and can perform inference.
-    """
-    is_tse = False
-
-    def __init__(self, model_id="shinuh/sr-corrnet-ss-1ch-wsj-fix-2spk", device="cuda:0"):
-        """
-        Initialize and load the SR-CorrNet-SS model from Hugging Face Hub.
-
-        Args:
-            model_id: Hugging Face model id
-            device: torch device (cuda/cpu)
-        """
-        self.device = device
-        self.sample_rate = 8000 # Default sample rate for WSJ0 models
-
-        if logger:
-            logger.info(f"[SR-CorrNet-SS] Initializing on device: {self.device}")
-        else:
-            print(f"[SR-CorrNet-SS] Initializing on device: {self.device}")
-
-        try:
-            from sr_corrnet import SSInference
-            self.model = SSInference.from_pretrained(model_id, device=device)
-            if logger:
-                logger.info("[SR-CorrNet-SS] Model initialization complete!")
-            else:
-                print("[SR-CorrNet-SS] Model initialization complete!")
-        except ImportError as e:
-            msg = "Missing sr_corrnet library. Please install via: pip install -e '.[hub]' in the SR_CorrNet_SS repo"
-            if logger: logger.error(msg)
-            else: print(msg)
-            raise e
-        except Exception as e:
-            if logger: logger.error(f"Failed to initialize SR-CorrNet-SS: {e}")
-            else: print(f"Failed to initialize SR-CorrNet-SS: {e}")
-            raise
-
-    def separate(self, audio_segment, sample_rate):
-        """
-        Perform audio source separation using SR-CorrNet-SS.
-
-        Args:
-            audio_segment (np.ndarray): Audio segment to separate
-            sample_rate (int): Audio sample rate
-
-        Returns:
-            tuple: (separated_audio_1, separated_audio_2) as numpy arrays
-        """
-        try:
-            target_length = len(audio_segment)
-
-            # Resample to model sample rate if needed
-            if sample_rate != self.sample_rate:
-                audio_model_sr = librosa.resample(audio_segment, orig_sr=sample_rate, target_sr=self.sample_rate)
-            else:
-                audio_model_sr = audio_segment
-
-            # Prepare tensor: model expects (channels, samples). We use 1 channel.
-            waveform_tensor = torch.tensor(audio_model_sr, dtype=torch.float32).unsqueeze(0).to(self.device)
-
-            # Inference
-            with torch.inference_mode():
-                result = self.model.process_waveform(waveform_tensor, n_spks=torch.tensor(2))
-            
-            srcs = result["waveforms"]
-            src1 = srcs[0].cpu().numpy()
-            src2 = srcs[1].cpu().numpy()
-
-            # Resample back to original sample rate if needed
-            if sample_rate != self.sample_rate:
-                src1 = librosa.resample(src1, orig_sr=self.sample_rate, target_sr=sample_rate)
-                src2 = librosa.resample(src2, orig_sr=self.sample_rate, target_sr=sample_rate)
-
-            # Match length exactly to original
-            def match_len(src, target):
-                if len(src) > target: return src[:target]
-                elif len(src) < target: return np.pad(src, (0, target - len(src)), mode='constant')
-                return src
-
-            src1 = match_len(src1, target_length)
-            src2 = match_len(src2, target_length)
-
-            return src1, src2
-
-        except Exception as e:
-            if logger:
-                logger.error(f"SR-CorrNet-SS separation failed: {e}")
-                import traceback
-                logger.error(f"Traceback: {traceback.format_exc()}")
-            return audio_segment, audio_segment
-
-
 @time_logger
 def identify_speaker_with_embedding(audio_segment, sample_rate, reference_embeddings, speaker_labels, embedding_model, device):
     """
@@ -729,12 +635,7 @@ def process_overlapping_segments_with_separation(segment_list, audio, overlap_th
         logger.warning("Embedding model not provided for blind separation, skipping separation")
         return audio, segment_list
 
-    if is_tse_separator:
-        separator_name = "TSE"
-    elif type(separator).__name__ == "SRCorrNetSeparator":
-        separator_name = "SR-CorrNet-SS"
-    else:
-        separator_name = "SepReformer"
+    separator_name = "TSE" if is_tse_separator else "SepReformer"
     micro_overlap_candidates = list(micro_overlap_candidates or [])
     logger.info(
         f"Processing overlapping segments with {separator_name} "

@@ -165,14 +165,6 @@ def _load_tse_separator(args, logger):
     )
 
 
-def _load_srcorrnet_separator(args, logger):
-    from utils.separation import SRCorrNetSeparator
-
-    device = _device_name_from_index(args.srcorrnet_device_index)
-    logger.info(f"Loading SR-CorrNet-SS separator on {device}: model_id={args.srcorrnet_model_id}")
-    return SRCorrNetSeparator(model_id=args.srcorrnet_model_id, device=device)
-
-
 def process_stage_music_overlap(args) -> Path:
     from utils.audio_preprocessing import set_logger as set_audio_logger
     from utils.audio_preprocessing import standardization
@@ -247,47 +239,27 @@ def process_stage_music_overlap(args) -> Path:
 
     logger.info("Stage 03: Overlap separation")
     separation_start = time.time()
-    separator = None
-    embedding_model = None
-    device = _torch_device_from_index(args.metis_device_index)
-
-    if getattr(args, "srcorrnet", False):
-        separator = _load_srcorrnet_separator(args, logger)
-        device = _torch_device_from_index(args.srcorrnet_device_index)
-        
-        try:
-            from pyannote.audio import Model
-            hf_token = cfg.get("huggingface_token", os.environ.get("HF_TOKEN"))
-            logger.info("Loading pyannote embedding model for SR-CorrNet blind separation")
-            embedding_model = Model.from_pretrained("pyannote/embedding", use_auth_token=hf_token)
-            if embedding_model:
-                embedding_model.to(device)
-                embedding_model.eval()
-        except ImportError:
-            logger.error("Missing pyannote.audio. Blind separation requires pyannote/embedding.")
-    elif args.metis_tse:
-        separator = _load_tse_separator(args, logger)
-
+    separator = _load_tse_separator(args, logger) if args.metis_tse else None
     overlap_pairs = detect_overlapping_segments(segment_list, float(args.overlap_threshold))
-    if separator is not None:
+    if args.metis_tse and separator is not None:
         audio, segment_list = process_overlapping_segments_with_separation(
             segment_list,
             audio,
             overlap_threshold=float(args.overlap_threshold),
             separator=separator,
-            embedding_model=embedding_model,
-            device=device,
+            embedding_model=None,
+            device=_torch_device_from_index(args.metis_device_index),
             micro_overlap_candidates=micro_overlap_candidates,
             micro_overlap_padding=float(args.micro_overlap_padding),
         )
     else:
-        logger.info("Overlap separation skipped (no separator enabled)")
+        logger.info("Metis TSE overlap separation skipped")
     separation_time = time.time() - separation_start
     writer.write_overlap(
         segment_list,
         audio,
         metadata={
-            "enabled": bool(getattr(args, "srcorrnet", False) or args.metis_tse),
+            "enabled": bool(args.metis_tse),
             "separator_available": separator is not None,
             "processing_time_seconds": separation_time,
             "rt_factor": separation_time / audio_duration if audio_duration > 0 else 0.0,
@@ -295,7 +267,7 @@ def process_stage_music_overlap(args) -> Path:
             "overlap_pair_count": len(overlap_pairs),
             "micro_overlap_candidate_count": len(micro_overlap_candidates),
             "micro_overlap_padding_seconds": float(args.micro_overlap_padding),
-            "tse_model": "SR-CorrNet-SS" if getattr(args, "srcorrnet", False) else "Metis-TSE",
+            "tse_model": "Metis-TSE",
             "metis_repo_dir": args.metis_repo_dir,
             "metis_ckpt_dir": args.metis_ckpt_dir,
             "metis_n_timesteps": int(args.metis_n_timesteps),
@@ -330,14 +302,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--metis_ckpt_dir", type=str, default="", help="Folder for Metis checkpoint downloads. Defaults to Amphion/models/tts/metis/ckpt.")
     parser.add_argument("--metis_n_timesteps", type=int, default=10, help="Metis TSE diffusion steps.")
     parser.add_argument("--metis_guidance_cfg", type=float, default=0.0, help="Metis TSE classifier-free guidance value.")
-    
-    parser.add_argument("--srcorrnet", action=argparse.BooleanOptionalAction, default=False, help="Enable SR-CorrNet-SS blind source separation (overrides metis_tse).")
-    parser.add_argument("--srcorrnet_model_id", type=str, default="shinuh/sr-corrnet-ss-1ch-wsj-fix-2spk", help="Hugging Face model id for SR-CorrNet-SS.")
-    
     parser.add_argument("--panns_device_index", type=int, default=0, help="Visible CUDA device index for PANNs. Use -1 for CPU.")
     parser.add_argument("--demucs_device_index", type=int, default=0, help="Visible CUDA device index for Demucs. Use -1 for CPU.")
     parser.add_argument("--metis_device_index", type=int, default=0, help="Visible CUDA device index for Metis. Use -1 for CPU.")
-    parser.add_argument("--srcorrnet_device_index", type=int, default=0, help="Visible CUDA device index for SR-CorrNet-SS. Use -1 for CPU.")
     return parser
 
 
