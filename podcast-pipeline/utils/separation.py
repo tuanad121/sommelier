@@ -452,10 +452,20 @@ def _extract_embedding_from_audio(audio_segment, sample_rate, embedding_model, d
     if len(audio_16k) == 0:
         return None
 
+    # Pad if shorter than 0.5 seconds (8000 samples at 16kHz) to avoid Conv1d kernel size errors
+    import torch.nn.functional as F
     audio_tensor = torch.as_tensor(audio_16k, dtype=torch.float32, device=device).unsqueeze(0)
-    with torch.inference_mode():
-        embedding = embedding_model(audio_tensor)
-    return _as_embedding_tensor(embedding, device)
+    min_samples = int(16000 * 0.5)
+    if audio_tensor.shape[1] < min_samples:
+        audio_tensor = F.pad(audio_tensor, (0, min_samples - audio_tensor.shape[1]))
+
+    try:
+        with torch.inference_mode():
+            embedding = embedding_model(audio_tensor)
+        return _as_embedding_tensor(embedding, device)
+    except Exception as e:
+        logger.warning(f"Failed to extract embedding from audio segment: {e}")
+        return None
 
 
 def _build_reference_speaker_assets(
