@@ -159,6 +159,23 @@ def _load_srcorrnet_separator(args, logger):
     return SRCorrNetSeparator(device=device)
 
 
+def _load_embedding_model(args, cfg, logger):
+    from pyannote.audio import Model as PyannoteModel
+    import torch
+    
+    device_idx = args.srcorrnet_device_index
+    device = torch.device(f"cuda:{device_idx}" if device_idx >= 0 else "cpu")
+    logger.info(f"Loading Pyannote Embedding model on {device}")
+    
+    try:
+        embedding_model = PyannoteModel.from_pretrained("pyannote/embedding", use_auth_token=cfg["huggingface_token"])
+        embedding_model = embedding_model.to(device)
+        logger.info("Embedding model loaded successfully")
+        return embedding_model
+    except Exception as e:
+        logger.error(f"Failed to load embedding model: {e}")
+        return None
+
 def process_stage_music_overlap(args) -> Path:
     from utils.audio_preprocessing import set_logger as set_audio_logger
     from utils.audio_preprocessing import standardization
