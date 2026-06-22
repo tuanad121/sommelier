@@ -134,88 +134,29 @@ def _ensure_metis_repo_layout(repo_dir):
         )
 
 
-class SepReformerSeparator:
+class SRCorrNetSeparator:
     """
-    Class that loads the SepReformer model once and can perform inference multiple times.
+    Wrapper for SR-CorrNet-SS speech separation model.
     """
-    def __init__(self, sepreformer_path, device):
+    def __init__(self, device):
         """
-        Initialize and load the SepReformer model.
+        Initialize and load the SR-CorrNet-SS model.
 
         Args:
-            sepreformer_path: Path to the SepReformer model directory
             device: torch device (cuda/cpu)
         """
-        import yaml
+        import torch
+        from sr_corrnet import SSInference
 
-        self.sepreformer_path = sepreformer_path
         self.device = device
+        logger.info(f"[SR-CorrNet-SS] Initializing on device: {self.device}")
 
-        print(f"[SepReformer] Initializing on device: {self.device}")
-
-        # Store original sys.path to restore later
-        original_sys_path = sys.path.copy()
-
-        try:
-            # Save the current 'models' and 'utils' modules if they exist
-            original_models = sys.modules.get('models', None)
-            original_utils = sys.modules.get('utils', None)
-
-            # Remove podcast-pipeline from sys.path temporarily
-            podcast_pipeline_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            paths_to_remove = [p for p in sys.path if podcast_pipeline_path in p]
-            for path in paths_to_remove:
-                sys.path.remove(path)
-
-            # Add SepReformer to path
-            if sepreformer_path not in sys.path:
-                sys.path.insert(0, sepreformer_path)
-
-            # Clear conflicting modules
-            modules_to_clear = [key for key in sys.modules.keys()
-                              if key.startswith('models.') or key.startswith('utils.') or key in ['models', 'utils']]
-            cleared_modules = {}
-            for module_name in modules_to_clear:
-                cleared_modules[module_name] = sys.modules[module_name]
-                del sys.modules[module_name]
-
-            # Import SepReformer's model
-            from models.SepReformer_Base_WSJ0.model import Model
-
-            # Restore the original modules
-            for module_name, module_obj in cleared_modules.items():
-                sys.modules[module_name] = module_obj
-
-            # Load SepReformer config
-            config_path = os.path.join(sepreformer_path, "models/SepReformer_Base_WSJ0/configs.yaml")
-            with open(config_path, 'r') as f:
-                yaml_dict = yaml.safe_load(f)
-            self.config = yaml_dict["config"]
-
-            # Load model
-            print("[SepReformer] Loading model...")
-            self.model = Model(**self.config["model"])
-
-            # Load checkpoint
-            checkpoint_dir = os.path.join(sepreformer_path, "models/SepReformer_Base_WSJ0/log/pretrain_weights")
-            if not os.path.exists(checkpoint_dir) or not os.listdir(checkpoint_dir):
-                checkpoint_dir = os.path.join(sepreformer_path, "models/SepReformer_Base_WSJ0/log/scratch_weights")
-
-            checkpoint_files = [f for f in os.listdir(checkpoint_dir) if f.endswith(('.pt', '.pth'))]
-            if not checkpoint_files:
-                raise FileNotFoundError(f"No checkpoint found in {checkpoint_dir}")
-
-            checkpoint_path = os.path.join(checkpoint_dir, checkpoint_files[-1])
-            checkpoint = torch.load(checkpoint_path, map_location=device)
-            self.model.load_state_dict(checkpoint['model_state_dict'])
-            self.model = self.model.to(device)
-            self.model.eval()
-
-            print("[SepReformer] Model initialization complete!")
-
-        finally:
-            # Restore original sys.path
-            sys.path = original_sys_path
+        # Load from Hugging Face Hub
+        self.model = SSInference.from_pretrained(
+            "shinuh/sr-corrnet-ss-1ch-wsj-fix-2spk",
+            device=str(self.device),
+        )
+        logger.info("[SR-CorrNet-SS] Model initialization complete!")
 
     def separate(self, audio_segment, sample_rate):
         """
@@ -228,6 +169,10 @@ class SepReformerSeparator:
         Returns:
             tuple: (separated_audio_1, separated_audio_2) as numpy arrays
         """
+        import torch
+        import librosa
+        import numpy as np
+
         try:
             # Resample to 8kHz if needed
             if sample_rate != 8000:
@@ -238,30 +183,21 @@ class SepReformerSeparator:
             # Prepare tensor
             mixture_tensor = torch.tensor(audio_8k, dtype=torch.float32).unsqueeze(0)
 
-            # Padding
-            stride = self.config["model"]["module_audio_enc"]["stride"]
-            remains = mixture_tensor.shape[-1] % stride
-            if remains != 0:
-                padding = stride - remains
-                mixture_padded = torch.nn.functional.pad(mixture_tensor, (0, padding), "constant", 0)
-            else:
-                mixture_padded = mixture_tensor
-
             # Inference
             with torch.inference_mode():
-                nnet_input = mixture_padded.to(self.device)
-                estim_src, _ = self.model(nnet_input)
+                result = self.model.process_waveform(mixture_tensor, n_spks=torch.tensor(2))
+                waveforms = result["waveforms"]
 
-                # Extract separated sources
-                src1 = estim_src[0][..., :mixture_tensor.shape[-1]].squeeze().cpu().numpy()
-                src2 = estim_src[1][..., :mixture_tensor.shape[-1]].squeeze().cpu().numpy()
+            # Extract separated sources
+            src1 = waveforms[0].squeeze().cpu().numpy()
+            src2 = waveforms[1].squeeze().cpu().numpy()
 
             # Resample back to original sample rate if needed
             if sample_rate != 8000:
                 src1 = librosa.resample(src1, orig_sr=8000, target_sr=sample_rate)
                 src2 = librosa.resample(src2, orig_sr=8000, target_sr=sample_rate)
 
-                # Match length exactly to original after resampling (rounding error correction)
+                # Match length exactly to original after resampling
                 target_length = len(audio_segment)
                 if len(src1) != target_length:
                     if len(src1) > target_length:
@@ -278,12 +214,10 @@ class SepReformerSeparator:
             return src1, src2
 
         except Exception as e:
-            logger.error(f"SepReformer separation failed: {e}")
+            logger.error(f"SR-CorrNet-SS separation failed: {e}")
             import traceback
             logger.error(f"Traceback: {traceback.format_exc()}")
-            logger.error(f"Traceback: {traceback.format_exc()}")
             return audio_segment, audio_segment
-
 
 class MetisTSESeparator:
     """

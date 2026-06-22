@@ -151,18 +151,12 @@ def _load_demucs_model(args, logger):
     return DemucsModel(model_name=args.demucs_model_name, device=device_name)
 
 
-def _load_tse_separator(args, logger):
-    from utils.separation import MetisTSESeparator
+def _load_srcorrnet_separator(args, logger):
+    from utils.separation import SRCorrNetSeparator
 
-    device = _device_name_from_index(args.metis_device_index)
-    logger.info(f"Loading Metis TSE separator on {device}: repo={args.metis_repo_dir}")
-    return MetisTSESeparator(
-        repo_dir=args.metis_repo_dir,
-        ckpt_dir=args.metis_ckpt_dir or None,
-        device=device,
-        n_timesteps=args.metis_n_timesteps,
-        guidance_cfg=args.metis_guidance_cfg,
-    )
+    device = _torch_device_from_index(args.srcorrnet_device_index)
+    logger.info(f"Loading SR-CorrNet-SS separator on {device}")
+    return SRCorrNetSeparator(device=device)
 
 
 def process_stage_music_overlap(args) -> Path:
@@ -199,7 +193,7 @@ def process_stage_music_overlap(args) -> Path:
         "Device map: "
         f"panns={_device_name_from_index(args.panns_device_index)}, "
         f"demucs={_device_name_from_index(args.demucs_device_index)}, "
-        f"metis={_device_name_from_index(args.metis_device_index)}"
+        f"srcorrnet={_device_name_from_index(args.srcorrnet_device_index)}"
     )
 
     audio = standardization(str(audio_path), cfg)
@@ -239,40 +233,33 @@ def process_stage_music_overlap(args) -> Path:
 
     logger.info("Stage 03: Overlap separation")
     separation_start = time.time()
-    separator = _load_tse_separator(args, logger) if args.metis_tse else None
+    separator = _load_srcorrnet_separator(args, logger) if args.srcorrnet else None
+    embedding_model = _load_embedding_model(args, cfg, logger) if args.srcorrnet else None
     overlap_pairs = detect_overlapping_segments(segment_list, float(args.overlap_threshold))
-    if args.metis_tse and separator is not None:
+    if args.srcorrnet and separator is not None and embedding_model is not None:
         audio, segment_list = process_overlapping_segments_with_separation(
             segment_list,
             audio,
             overlap_threshold=float(args.overlap_threshold),
             separator=separator,
-            embedding_model=None,
-            device=_torch_device_from_index(args.metis_device_index),
-            micro_overlap_candidates=micro_overlap_candidates,
-            micro_overlap_padding=float(args.micro_overlap_padding),
+            embedding_model=embedding_model,
+            device=_torch_device_from_index(args.srcorrnet_device_index),
         )
     else:
-        logger.info("Metis TSE overlap separation skipped")
+        logger.info("SR-CorrNet-SS overlap separation skipped")
     separation_time = time.time() - separation_start
     writer.write_overlap(
         segment_list,
         audio,
         metadata={
-            "enabled": bool(args.metis_tse),
+            "enabled": bool(args.srcorrnet),
             "separator_available": separator is not None,
+            "embedding_model_available": embedding_model is not None,
             "processing_time_seconds": separation_time,
             "rt_factor": separation_time / audio_duration if audio_duration > 0 else 0.0,
             "overlap_threshold_seconds": float(args.overlap_threshold),
             "overlap_pair_count": len(overlap_pairs),
-            "micro_overlap_candidate_count": len(micro_overlap_candidates),
-            "micro_overlap_padding_seconds": float(args.micro_overlap_padding),
-            "tse_model": "Metis-TSE",
-            "metis_repo_dir": args.metis_repo_dir,
-            "metis_ckpt_dir": args.metis_ckpt_dir,
-            "metis_n_timesteps": int(args.metis_n_timesteps),
-            "metis_guidance_cfg": float(args.metis_guidance_cfg),
-            "separated_segments": int(sum(bool(seg.get("is_separated")) or bool(seg.get("sepreformer")) for seg in segment_list)),
+            "separated_segments": int(sum(bool(seg.get("is_separated")) or bool(seg.get("srcorrnet")) for seg in segment_list)),
         },
     )
 
@@ -292,19 +279,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output_run_dir", type=str, default="", help="Where to write 02_music_clean and 03_overlap. Defaults to input_run_dir.")
     parser.add_argument("--config_path", type=str, default="config.json", help="Pipeline config.json path.")
     parser.add_argument("--demucs", action=argparse.BooleanOptionalAction, default=True, help="Enable PANNs music detection and Demucs cleaning.")
-    parser.add_argument("--metis_tse", action=argparse.BooleanOptionalAction, default=True, help="Enable Metis Target Speaker Extraction.")
-    parser.add_argument("--overlap_threshold", type=float, default=1.0, help="Minimum overlap seconds to run TSE on a pair.")
-    parser.add_argument("--micro-overlap-padding", type=float, default=0.35, help="Seconds of context around short overlap candidates when cleaning the target speaker.")
+    parser.add_argument("--srcorrnet", action=argparse.BooleanOptionalAction, default=True, help="Enable SR-CorrNet-SS overlap separation.")
+    parser.add_argument("--overlap_threshold", type=float, default=1.0, help="Minimum overlap seconds to run SR-CorrNet-SS on a pair.")
     parser.add_argument("--demucs_padding", type=float, default=0.5, help="Seconds of context around each segment for music detection/cleaning.")
     parser.add_argument("--demucs_model_name", type=str, default="htdemucs", help="Demucs model name.")
     parser.add_argument("--panns_data_dir", type=str, default="", help="Folder containing Cnn14_mAP=0.431.pth.")
-    parser.add_argument("--metis_repo_dir", type=str, default="/kaggle/working/Amphion", help="Cloned open-mmlab/Amphion repo directory.")
-    parser.add_argument("--metis_ckpt_dir", type=str, default="", help="Folder for Metis checkpoint downloads. Defaults to Amphion/models/tts/metis/ckpt.")
-    parser.add_argument("--metis_n_timesteps", type=int, default=10, help="Metis TSE diffusion steps.")
-    parser.add_argument("--metis_guidance_cfg", type=float, default=0.0, help="Metis TSE classifier-free guidance value.")
+    parser.add_argument("--srcorrnet_path", type=str, default="", help="SR-CorrNet-SS repo folder.")
     parser.add_argument("--panns_device_index", type=int, default=0, help="Visible CUDA device index for PANNs. Use -1 for CPU.")
     parser.add_argument("--demucs_device_index", type=int, default=0, help="Visible CUDA device index for Demucs. Use -1 for CPU.")
-    parser.add_argument("--metis_device_index", type=int, default=0, help="Visible CUDA device index for Metis. Use -1 for CPU.")
+    parser.add_argument("--srcorrnet_device_index", type=int, default=0, help="Visible CUDA device index for SR-CorrNet-SS/embedding. Use -1 for CPU.")
     return parser
 
 
