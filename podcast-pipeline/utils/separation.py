@@ -153,7 +153,7 @@ class SRCorrNetSeparator:
 
         # Load from Hugging Face Hub
         self.model = SSInference.from_pretrained(
-            "shinuh/sr-corrnet-ss-1ch-wsj-fix-2spk",
+            checkpoint_path="shinuh/sr-corrnet-ss-1ch-wsj-fix-2spk",
             device=str(self.device),
         )
         logger.info("[SR-CorrNet-SS] Model initialization complete!")
