@@ -569,7 +569,7 @@ def process_overlapping_segments_with_separation(segment_list, audio, overlap_th
         logger.warning("Embedding model not provided for blind separation, skipping separation")
         return audio, segment_list
 
-    separator_name = "TSE" if is_tse_separator else "SepReformer"
+    separator_name = "TSE" if is_tse_separator else type(separator).__name__
     micro_overlap_candidates = list(micro_overlap_candidates or [])
     logger.info(
         f"Processing overlapping segments with {separator_name} "
