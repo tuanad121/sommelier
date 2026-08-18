@@ -37,19 +37,34 @@ def _load_jsonl(p: Path) -> list[dict]:
     return [json.loads(l) for l in p.open() if l.strip()]
 
 
-def _split_runs(turns: list[dict], max_gap_s: float) -> list[list[dict]]:
-    """Split into contiguous runs. Turns already sorted by start."""
+def _split_runs(turns: list[dict], max_gap_s: float,
+                max_turn_duration_s: float | None = None) -> list[list[dict]]:
+    """Split into contiguous runs. Turns already sorted by start.
+
+    A turn with duration > max_turn_duration_s (if set) is EXCLUDED from all
+    runs and acts as a splitter — mirrors Sommelier paper §3.1 ("truncate the
+    region if an utterance exceeding N seconds appeared"). Long monologues
+    destabilize Moshi-style FD training and are dropped rather than kept.
+    """
     if not turns:
         return []
-    runs: list[list[dict]] = [[turns[0]]]
-    for prev, cur in zip(turns, turns[1:]):
-        idx_ok = cur["turn_index"] - prev["turn_index"] == 1
-        time_ok = cur["start"] - prev["end"] <= max_gap_s
+    runs: list[list[dict]] = [[]]
+    for t in turns:
+        if max_turn_duration_s is not None and t["duration"] > max_turn_duration_s:
+            if runs[-1]:
+                runs.append([])
+            continue
+        if not runs[-1]:
+            runs[-1].append(t)
+            continue
+        prev = runs[-1][-1]
+        idx_ok = t["turn_index"] - prev["turn_index"] == 1
+        time_ok = t["start"] - prev["end"] <= max_gap_s
         if idx_ok and time_ok:
-            runs[-1].append(cur)
+            runs[-1].append(t)
         else:
-            runs.append([cur])
-    return runs
+            runs.append([t])
+    return [r for r in runs if r]
 
 
 def _turn_to_row(t: dict) -> dict:
@@ -157,6 +172,9 @@ def main() -> None:
                    help="drop conversations shorter than this (default 6)")
     p.add_argument("--max-gap-s", type=float, default=2.5,
                    help="max allowed silence between turns (default 2.5s)")
+    p.add_argument("--max-turn-duration-s", type=float, default=10.0,
+                   help="drop turns longer than this AND split the run at that point. "
+                        "Default 10s per Sommelier paper §3.1; set 0 to disable.")
     p.add_argument("--min-duration-s", type=float, default=0.0,
                    help="drop conversations shorter than this (default 0)")
     p.add_argument("--only-two-speaker", action="store_true",
@@ -199,7 +217,11 @@ def main() -> None:
         source_channel = first.get("source_channel", "")
         source_genre = first.get("source_genre", "")
 
-        runs = _split_runs(turns, args.max_gap_s)
+        max_turn_dur = args.max_turn_duration_s if args.max_turn_duration_s > 0 else None
+        n_before = len(turns)
+        runs = _split_runs(turns, args.max_gap_s, max_turn_dur)
+        n_kept = sum(len(r) for r in runs)
+        stats["turns_dropped_too_long"] += n_before - n_kept
         for run_idx, run in enumerate(runs):
             if len(run) < args.min_turns:
                 stats["runs_dropped_short"] += 1
