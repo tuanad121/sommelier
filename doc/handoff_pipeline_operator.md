@@ -305,18 +305,32 @@ Emits one JSON per conversation + `summary.tsv` + `preview.html`. Yields ~8 h fr
 python scripts/build_training_conversations.py \
   --root $FINAL \
   --out data/training_conversations_fullduplex \
-  --min-turns 2 --max-gap-s 1.0 --min-duration-s 30 \
+  --min-turns 6 --max-gap-s 1.0 --min-duration-s 30 \
+  --max-turn-duration-s 10.0 \
   --exclude-bgm --only-two-speaker
 
-# Step 2: assemble stereo
+# Step 2: assemble stereo (both channel orientations)
 python scripts/build_full_duplex_2channel.py \
   --convs-dir data/training_conversations_fullduplex/conversations \
   --clips-root $FINAL \
   --out data/full_duplex_stereo
-# writes <conversation_id>.wav (16 kHz stereo, L=first speaker, R=other) + .json meta
+# writes <conversation_id>__oriA.wav / .json  (natural: first-turn speaker on L)
+#    and <conversation_id>__oriB.wav / .json  (channels swapped — free 2× aug)
+# All timestamps in the JSON are stereo-WAV-relative (zero-origin);
+# _original_clip_offset_s preserves the parent-clip offset for provenance.
 ```
 
 **Do NOT use** `min-dur 60s + max-gap 0.5s + min-turns anything` (the "STRICT" profile) — yield is <1 %, not worth it. See `doc/full_duplex_data_scaling.md`.
+
+**Publishing the FD stereo to HuggingFace.** When you push the FD stereo output to your HF dataset, include the two scripts and the format README alongside the WAV/JSON pairs so consumers can decode without reverse-engineering. Concretely, copy these into your HF staging dir before `hf upload`:
+
+```bash
+cp scripts/build_full_duplex_2channel.py   hf_stage_fd/
+cp scripts/read_full_duplex.py             hf_stage_fd/
+cp doc/README_fullduplex.md                hf_stage_fd/README.md
+```
+
+`read_full_duplex.py` is the canonical decoder (`python read_full_duplex.py <conv>.json` prints the transcript aligned to stereo time; `--extract-turn N --out mono.wav` slices one turn from the right channel). `README.md` documents the format contract, schema, filter profile, and design rationale (why zero-origin, why both orientations).
 
 ## 7. Storage discipline (important on shared cluster fs)
 

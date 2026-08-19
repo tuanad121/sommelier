@@ -19,9 +19,12 @@ For each conversation we:
     audio).
 
 Output:
-  <out_dir>/<conversation_id>.wav   ← 16 kHz stereo
-  <out_dir>/<conversation_id>.json  ← metadata + turn timing on the
-                                       stereo timeline
+  <out_dir>/<conversation_id>.wav   ← 16 kHz stereo, PCM_16
+  <out_dir>/<conversation_id>.json  ← full turn schema (text, words, flags)
+                                       with ZERO-ORIGIN timestamps aligned
+                                       to the stereo WAV. Parent-clip offset
+                                       preserved as `_original_clip_offset_s`
+                                       for provenance.
 
 Usage:
     python scripts/build_full_duplex_2channel.py \\
@@ -103,28 +106,79 @@ def _assemble_conversation(conv: dict, clip_dir: Path) -> tuple[np.ndarray, dict
     if peak > 1.0:
         stereo = stereo / peak
 
+    # Zero-origin design: the stereo WAV starts at t=0, so we shift every
+    # timestamp in the paired JSON by `start_time` (== turns[0]["start"] in
+    # the parent clip's timeline). This means a dataloader can slice the
+    # stereo array with turn["start"]*SR directly — no offset math, no
+    # off-by-one silent-region bugs. The original clip-time offset is kept
+    # as `_original_clip_offset_s` for provenance / debugging back to the
+    # raw pipeline artifacts.
+    def _shift(x: float) -> float:
+        return round(x - start_time, 3)
+
+    def _shift_words(words):
+        return [
+            {**w, "start": _shift(w["start"]), "end": _shift(w["end"])}
+            for w in (words or [])
+        ]
+
     meta = {
         "conversation_id": conv["conversation_id"],
         "source_clip": conv["source_clip"],
         "source_url": conv.get("source_url"),
+        "source_channel": conv.get("source_channel"),
+        "source_genre": conv.get("source_genre"),
         "duration_s": round(end_time - start_time, 2),
         "n_turns": len(turns),
+        "unique_speakers": sorted({t["speaker"] for t in turns}),
         "channels": {"L": left_spk, "R": right_spk},
-        "start_offset_in_source_clip_s": start_time,
+        "channel_of": channel_of,  # {speaker_id: 0|1} — handy for dataloaders
+        "sample_rate": SR,
+        "_original_clip_offset_s": round(start_time, 3),
+        "_original_clip_time_range": [round(start_time, 3), round(end_time, 3)],
         "turns": [
             {
                 "turn_id": t["turn_id"],
+                "turn_index": t.get("turn_index"),
                 "speaker": t["speaker"],
                 "channel": channel_of[t["speaker"]],
-                "start": round(t["start"] - start_time, 3),
-                "end": round(t["end"] - start_time, 3),
+                "start": _shift(t["start"]),
+                "end": _shift(t["end"]),
+                "duration": round(t["end"] - t["start"], 3),
+                "audio_path": t.get("audio_path"),
                 "text": t.get("text", ""),
+                "text_source": t.get("text_source"),
+                "flags": t.get("flags", {}),
+                "words": _shift_words(t.get("words")),
+                **({"contested_words": t["contested_words"]}
+                   if t.get("contested_words") else {}),
             }
             for t in turns
         ],
         "problems": problems,
     }
     return stereo, meta
+
+
+def _swap_channels(meta: dict) -> dict:
+    """Return a new meta dict with L↔R channel identities flipped."""
+    swapped = dict(meta)  # shallow — we deep-copy the sub-fields we mutate
+    swapped["channels"] = {"L": meta["channels"]["R"], "R": meta["channels"]["L"]}
+    swapped["channel_of"] = {spk: 1 - ch for spk, ch in meta["channel_of"].items()}
+    swapped["turns"] = [
+        {**t, "channel": 1 - t["channel"]} for t in meta["turns"]
+    ]
+    return swapped
+
+
+def _write_pair(out_dir: Path, stem: str, stereo, meta: dict) -> None:
+    # The conversation_id in meta must match the file stem so downstream
+    # consumers can index either way.
+    meta = {**meta, "conversation_id": stem}
+    sf.write(str(out_dir / f"{stem}.wav"), stereo, SR, subtype="PCM_16")
+    (out_dir / f"{stem}.json").write_text(
+        json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
 
 def main() -> None:
@@ -156,15 +210,21 @@ def main() -> None:
             failed += 1
             print(f"[fail] {conv['conversation_id']}: {e}")
             continue
-        wav_out = args.out / f"{conv['conversation_id']}.wav"
-        sf.write(str(wav_out), stereo, SR, subtype="PCM_16")
-        (args.out / f"{conv['conversation_id']}.json").write_text(
-            json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        # Emit both channel orientations. Rationale: our podcast sources are
+        # peer-symmetric (co-hosts as often as host+guest), so no natural
+        # "assistant channel" exists. Emitting both orientations gives the FD
+        # trainer channel-invariant supervision at zero annotation cost and
+        # doubles the effective training data. See doc/full_duplex_data_scaling.md
+        # for the design decision (deviates from Sommelier paper §3.1 which
+        # fixes one speaker on the left).
+        _write_pair(args.out, meta["conversation_id"] + "__oriA", stereo, meta)
+        _write_pair(args.out, meta["conversation_id"] + "__oriB",
+                    stereo[:, ::-1].copy(), _swap_channels(meta))
         total_hours += meta["duration_s"] / 3600
         ok += 1
 
-    print(f"[done] {ok} stereo conversations written ({total_hours:.2f}h), {failed} failed")
+    print(f"[done] {ok} conversations × 2 orientations = "
+          f"{ok * 2} stereo files ({total_hours * 2:.2f}h), {failed} failed")
     print(f"       -> {args.out}/")
 
 

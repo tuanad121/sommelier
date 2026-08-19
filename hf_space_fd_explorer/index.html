@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>vi-Sommelier v0 FD Explorer</title>
+  <style>
+    :root { color-scheme: light; --ink:#172033; --muted:#667085; --line:#d9e1ee; --bg:#f3f6fb; --card:#fff; --blue:#3157d5; --green:#087a55; --red:#b42318; --amber:#a15c07; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.48 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    header { background:linear-gradient(125deg,#172b62,#3157d5 62%,#768af0); color:white; padding:38px max(22px,calc((100vw - 1180px)/2)); }
+    header h1 { margin:0 0 8px; font-size:clamp(28px,5vw,44px); letter-spacing:-.03em; }
+    header p { max-width:820px; margin:0; color:#e8edff; font-size:16px; }
+    header a { color:white; }
+    main { max-width:1180px; margin:0 auto; padding:24px 18px 60px; }
+    .notice { padding:14px 16px; border:1px solid #b8c7f6; background:#edf1ff; border-radius:12px; margin-bottom:18px; }
+    .notice.warn { border-color:#f0c674; background:#fef6dd; color:var(--amber); }
+    .stats { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin:18px 0; }
+    .stat { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:15px; }
+    .stat b { display:block; font-size:24px; }
+    .stat span { color:var(--muted); font-size:13px; }
+    .filters { display:grid; grid-template-columns:2fr repeat(3,1fr); gap:10px; padding:14px; background:white; border:1px solid var(--line); border-radius:14px; position:sticky; top:8px; z-index:3; box-shadow:0 8px 24px #263b7210; }
+    input,select,button { width:100%; border:1px solid #bdc8d8; border-radius:9px; padding:9px 10px; background:white; color:var(--ink); font:inherit; }
+    button { cursor:pointer; font-weight:650; }
+    button.primary { color:white; background:var(--blue); border-color:var(--blue); }
+    button:disabled { opacity:.4; cursor:not-allowed; }
+    .count { margin:18px 2px 10px; color:var(--muted); }
+    .grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
+    article { background:var(--card); border:1px solid var(--line); border-radius:15px; padding:16px; min-width:0; }
+    .top { display:flex; justify-content:space-between; gap:10px; align-items:flex-start; }
+    .eyebrow { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.06em; }
+    h2 { margin:2px 0 0; font-size:17px; word-break:break-all; }
+    .badge { white-space:nowrap; border-radius:999px; padding:5px 9px; font-weight:750; font-size:12px; }
+    .oriA { background:#e1eaff; color:#3157d5; }
+    .oriB { background:#e5f7f0; color:var(--green); }
+    .meta-row { display:flex; flex-wrap:wrap; gap:14px; margin:8px 0 12px; color:var(--muted); font-size:13px; }
+    .meta-row b { color:var(--ink); }
+    audio { width:100%; height:38px; margin-top:6px; }
+    .chan-line { display:flex; gap:12px; font-size:12px; color:var(--muted); margin-top:6px; }
+    .chan-line span b { color:var(--ink); font-family:ui-monospace,monospace; }
+    .preview { padding:10px 12px; border-radius:10px; background:#f8fafc; border:1px solid #e5eaf1; font-size:13px; margin-top:12px; max-height:120px; overflow:auto; }
+    .provenance { margin-top:6px; color:var(--muted); font-size:12px; }
+    .provenance a { color:var(--blue); text-decoration:none; }
+    .provenance a:hover { text-decoration:underline; }
+    details { margin-top:10px; }
+    summary { cursor:pointer; color:var(--blue); font-weight:650; font-size:13px; }
+    .transcript { margin-top:10px; max-height:340px; overflow:auto; border:1px solid #e5eaf1; border-radius:10px; padding:10px; background:#fafbfd; }
+    .turn { display:grid; grid-template-columns:auto 1fr; gap:10px; padding:6px 8px; border-top:1px solid #eef1f7; font-size:13px; cursor:pointer; border-radius:6px; transition:background .15s; }
+    .turn:first-child { border:0; }
+    .turn:hover { background:#eef2ff; }
+    .turn.playing { background:#fff4d6; box-shadow:0 0 0 2px #f0c674 inset; }
+    .turn.playing.L { background:#e1eaff; box-shadow:0 0 0 2px var(--blue) inset; }
+    .turn.playing.R { background:#e5f7f0; box-shadow:0 0 0 2px var(--green) inset; }
+    .turn .t-tag { font-family:ui-monospace,monospace; font-size:11px; color:var(--muted); white-space:nowrap; }
+    .turn .t-tag b { display:block; color:var(--ink); }
+    .turn.L .t-tag b { color:var(--blue); }
+    .turn.R .t-tag b { color:var(--green); }
+    .now-playing { display:flex; align-items:center; gap:8px; margin-top:6px; padding:6px 10px; border-radius:8px; background:#f8fafc; border:1px solid #e5eaf1; font-size:12px; color:var(--muted); }
+    .now-playing .lr-badge { font-family:ui-monospace,monospace; font-weight:750; padding:2px 8px; border-radius:4px; }
+    .now-playing .lr-badge.L { background:#e1eaff; color:var(--blue); }
+    .now-playing .lr-badge.R { background:#e5f7f0; color:var(--green); }
+    .now-playing .lr-badge.none { background:#f0f0f0; color:var(--muted); }
+    .pager { display:flex; gap:10px; justify-content:center; margin:22px 0; align-items:center; color:var(--muted); font-size:14px; }
+    .pager button { width:auto; min-width:110px; }
+    footer { color:var(--muted); text-align:center; padding-top:20px; font-size:13px; }
+    @media (max-width:820px) { .stats,.filters,.grid { grid-template-columns:1fr; } .filters { position:static; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>vi-Sommelier v0 · Full-Duplex Explorer</h1>
+    <p>Browse the FD stereo subset — Vietnamese dyadic podcast conversations rendered as 2-channel stereo (L / R = one speaker each) with paired transcript JSON. <a href="https://huggingface.co/datasets/tuanamz/vi-sommelier-v0">Dataset</a> · <a href="https://huggingface.co/datasets/tuanamz/vi-sommelier-v0/blob/main/fd/README.md">Format doc</a></p>
+  </header>
+  <main>
+    <div class="notice" id="auth-notice"><b>Gated dataset — token required.</b> 1) <a href="https://huggingface.co/datasets/tuanamz/vi-sommelier-v0">Request access</a> on the dataset page and wait for approval. 2) Create a read-only token at <a href="https://huggingface.co/settings/tokens" target="_blank">huggingface.co/settings/tokens</a>. 3) Paste it below — it's kept only in your browser's localStorage, never sent anywhere except HuggingFace.
+      <div style="display:flex;gap:8px;margin-top:10px;align-items:center;">
+        <input id="hf-token" type="password" placeholder="hf_..." style="flex:1;font-family:ui-monospace,monospace;" autocomplete="off">
+        <button id="save-token" class="primary" style="width:auto;">Save token &amp; load</button>
+        <button id="clear-token" style="width:auto;">Clear</button>
+      </div>
+    </div>
+    <section class="stats" id="stats"><div class="stat"><b>…</b><span>Loading manifest</span></div></section>
+    <section class="filters">
+      <input id="search" placeholder="Search conversation, clip, channel, transcript preview…">
+      <select id="channel"><option value="">All source channels</option></select>
+      <select id="orientation"><option value="A">Orientation A only</option><option value="B">Orientation B only</option><option value="">Both orientations</option></select>
+      <select id="duration"><option value="">All durations</option><option value="short">Short (&lt;30s)</option><option value="med">Medium (30–90s)</option><option value="long">Long (&gt;90s)</option></select>
+    </section>
+    <div class="count" id="count"></div>
+    <section class="grid" id="cards"></section>
+    <div class="pager"><button id="previous">Previous</button><span id="page-info"></span><button id="next" class="primary">Next</button></div>
+    <footer>vi-Sommelier v0 FD · 146 conversations × 2 orientations · full transcripts + word timings in paired <code>.json</code></footer>
+  </main>
+  <script>
+    const REPO = 'https://huggingface.co/datasets/tuanamz/vi-sommelier-v0/resolve/main';
+    const PAGE_SIZE = 10;
+    let rows = [], filtered = [], page = 0;
+    const $ = id => document.getElementById(id);
+    const escapeHtml = t => String(t ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+
+    function authHeaders() {
+      const t = localStorage.getItem('hf_token');
+      return t ? { Authorization: `Bearer ${t}` } : {};
+    }
+
+    async function load() {
+      const hasToken = !!localStorage.getItem('hf_token');
+      if (hasToken) {
+        // Restore into the input so user sees it's there (masked as password field)
+        $('hf-token').value = localStorage.getItem('hf_token');
+      }
+      try {
+        const response = await fetch(`${REPO}/fd/manifest.jsonl`, { headers: authHeaders() });
+        if (response.status === 401 || response.status === 403) {
+          $('stats').innerHTML = `<div class="stat"><b>🔒</b><span>${hasToken ? 'Token rejected — check approval status' : 'Paste HF token above to load'}</span></div>`;
+          $('cards').innerHTML = hasToken
+            ? `<article class="notice warn"><b>Access denied (HTTP ${response.status}).</b> Your token is valid but you may not be approved for this dataset yet. Check the <a href="https://huggingface.co/datasets/tuanamz/vi-sommelier-v0">dataset page</a>.</article>`
+            : '';
+          return;
+        }
+        if (!response.ok) throw new Error(`manifest fetch failed: ${response.status}`);
+        rows = (await response.text()).trim().split('\n').map(JSON.parse);
+      } catch (err) {
+        $('cards').innerHTML = `<article><h2>Could not load manifest</h2><pre style="background:#101828;color:#e4e7ec;padding:12px;border-radius:10px;overflow:auto;font-size:12px;">${escapeHtml(err)}</pre></article>`;
+        return;
+      }
+
+      // populate channel filter
+      const channels = [...new Set(rows.map(r => r.source_channel).filter(Boolean))].sort();
+      channels.forEach(c => $('channel').insertAdjacentHTML('beforeend', `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`));
+
+      // aggregate stats — count unique conversations (each has 2 orientation rows)
+      const uniqConvs = new Set(rows.map(r => r.source_clip + '__' + r.conversation_id.split('__').slice(-2, -1)[0]));
+      const totalHours = rows.filter(r => r.orientation === 'A').reduce((s, r) => s + r.duration_s, 0) / 3600;
+      const sources = new Set(rows.map(r => r.source_channel).filter(Boolean));
+      $('stats').innerHTML = `
+        <div class="stat"><b>${uniqConvs.size}</b><span>Conversations (× 2 orientations)</span></div>
+        <div class="stat"><b>${totalHours.toFixed(2)} h</b><span>Stereo audio</span></div>
+        <div class="stat"><b>${rows.length}</b><span>Files (stereo WAVs + JSON)</span></div>
+        <div class="stat"><b>${sources.size || '—'}</b><span>Source channels</span></div>`;
+      applyFilters();
+    }
+
+    function applyFilters() {
+      const q = $('search').value.trim().toLowerCase();
+      const ch = $('channel').value;
+      const ori = $('orientation').value;
+      const dur = $('duration').value;
+      filtered = rows.filter(r => {
+        if (ch && r.source_channel !== ch) return false;
+        if (ori && r.orientation !== ori) return false;
+        if (dur === 'short' && r.duration_s >= 30) return false;
+        if (dur === 'med' && (r.duration_s < 30 || r.duration_s > 90)) return false;
+        if (dur === 'long' && r.duration_s <= 90) return false;
+        if (q) {
+          const hay = `${r.conversation_id} ${r.source_clip} ${r.source_channel || ''} ${r.preview}`.toLowerCase();
+          if (!hay.includes(q)) return false;
+        }
+        return true;
+      });
+      page = 0; render();
+    }
+
+    function render() {
+      const start = page * PAGE_SIZE, end = Math.min(start + PAGE_SIZE, filtered.length);
+      const visible = filtered.slice(start, end);
+      $('count').textContent = `${filtered.length} matching · showing ${filtered.length ? start + 1 : 0}–${end}`;
+      $('cards').innerHTML = visible.map((r, i) => card(r, start + i)).join('');
+      $('previous').disabled = page === 0;
+      $('next').disabled = end >= filtered.length;
+      $('page-info').textContent = filtered.length ? `page ${page + 1} of ${Math.ceil(filtered.length / PAGE_SIZE)}` : '';
+      document.querySelectorAll('button.load-audio').forEach(btn => {
+        btn.addEventListener('click', () => loadCard(btn));
+      });
+    }
+
+    async function loadCard(btn) {
+      const idx = btn.dataset.idx;
+      btn.disabled = true;
+      btn.textContent = '⏳ fetching audio + transcript…';
+      try {
+        const [audioResp, jsonResp] = await Promise.all([
+          fetch(btn.dataset.wav, { headers: authHeaders() }),
+          fetch(btn.dataset.json, { headers: authHeaders() }),
+        ]);
+        if (!audioResp.ok) throw new Error(`audio HTTP ${audioResp.status}`);
+        if (!jsonResp.ok) throw new Error(`json HTTP ${jsonResp.status}`);
+        const [blob, meta] = await Promise.all([audioResp.blob(), jsonResp.json()]);
+        const audio = document.getElementById(`audio-${idx}`);
+        const transcriptEl = document.getElementById(`transcript-${idx}`);
+        const npLR = document.getElementById(`np-lr-${idx}`);
+        const npInfo = document.getElementById(`np-info-${idx}`);
+        audio.src = URL.createObjectURL(blob);
+        document.getElementById(`player-${idx}`).style.display = '';
+        document.getElementById(`preview-${idx}`).style.display = 'none';
+        // Render turns — clickable, seek on click
+        transcriptEl.innerHTML = meta.turns.map((t, i) => {
+          const ch = t.channel === 0 ? 'L' : 'R';
+          const spk = String(t.speaker).split('_').pop();
+          return `<div class="turn ${ch}" data-t-idx="${i}" data-start="${t.start}"><div class="t-tag"><b>${ch} · ${escapeHtml(spk)}</b>${t.start.toFixed(2)}s</div><div>${escapeHtml(t.text || '')}</div></div>`;
+        }).join('');
+        transcriptEl.querySelectorAll('.turn').forEach(row => {
+          row.addEventListener('click', () => {
+            audio.currentTime = parseFloat(row.dataset.start);
+            audio.play();
+          });
+        });
+        // Karaoke highlight on timeupdate
+        const turns = meta.turns;
+        let lastPlayingIdx = -1;
+        audio.addEventListener('timeupdate', () => {
+          const t = audio.currentTime;
+          // binary search: find the turn whose [start,end] contains t
+          let lo = 0, hi = turns.length - 1, found = -1;
+          while (lo <= hi) {
+            const mid = (lo + hi) >> 1;
+            const tt = turns[mid];
+            if (t < tt.start) hi = mid - 1;
+            else if (t >= tt.end) lo = mid + 1;
+            else { found = mid; break; }
+          }
+          if (found === lastPlayingIdx) return;
+          if (lastPlayingIdx !== -1) {
+            transcriptEl.querySelector(`.turn[data-t-idx="${lastPlayingIdx}"]`)?.classList.remove('playing');
+          }
+          if (found !== -1) {
+            const tt = turns[found];
+            const el = transcriptEl.querySelector(`.turn[data-t-idx="${found}"]`);
+            el?.classList.add('playing');
+            el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            const ch = tt.channel === 0 ? 'L' : 'R';
+            const chName = tt.channel === 0 ? meta.channels.L : meta.channels.R;
+            npLR.textContent = ch;
+            npLR.className = `lr-badge ${ch}`;
+            npInfo.textContent = `${chName} · ${tt.start.toFixed(2)}–${tt.end.toFixed(2)}s`;
+          } else {
+            npLR.textContent = '—';
+            npLR.className = 'lr-badge none';
+            npInfo.textContent = 'silence';
+          }
+          lastPlayingIdx = found;
+        });
+        btn.remove();
+      } catch (err) {
+        console.error(err);
+        btn.textContent = `⚠ ${err.message}`;
+        btn.style.background = '#fee4e2';
+        btn.style.color = 'var(--red)';
+        btn.disabled = false;
+      }
+    }
+
+    function card(row, idx) {
+      const wavUrl = `${REPO}/${row.wav_path}`;
+      const oriClass = row.orientation === 'A' ? 'oriA' : 'oriB';
+      const srcLink = row.source_url ? `<a href="${escapeHtml(row.source_url)}" target="_blank" rel="noopener">source video</a>` : '<span>(no source URL)</span>';
+      return `<article>
+        <div class="top">
+          <div>
+            <div class="eyebrow">${escapeHtml(row.source_channel || 'unknown channel')} · ${escapeHtml(row.source_clip)}</div>
+            <h2>${escapeHtml(row.conversation_id)}</h2>
+          </div>
+          <span class="badge ${oriClass}">ori ${row.orientation}</span>
+        </div>
+        <div class="meta-row">
+          <span><b>${row.duration_s.toFixed(1)}s</b> stereo</span>
+          <span><b>${row.n_turns}</b> turns</span>
+          <span><b>${row.unique_speakers.length}</b> speakers</span>
+        </div>
+        <button class="load-audio" data-idx="${idx}" data-wav="${escapeHtml(wavUrl)}" data-json="${escapeHtml(`${REPO}/${row.json_path}`)}" style="width:auto;background:#f3f6fb;border-color:#bdc8d8;font-size:13px;padding:6px 12px;margin-top:6px;">▶ Load audio + transcript</button>
+        <div id="player-${idx}" style="display:none;">
+          <audio id="audio-${idx}" controls preload="none" style="width:100%;height:38px;margin-top:6px;"></audio>
+          <div class="now-playing"><span class="lr-badge none" id="np-lr-${idx}">—</span><span id="np-info-${idx}">Not playing</span></div>
+          <div class="transcript" id="transcript-${idx}"></div>
+        </div>
+        <div class="chan-line">
+          <span>L: <b>${escapeHtml(row.channels.L)}</b></span>
+          <span>R: <b>${escapeHtml(row.channels.R)}</b></span>
+        </div>
+        <div class="preview" id="preview-${idx}">${escapeHtml(row.preview)}</div>
+        <div class="provenance">${srcLink}</div>
+      </article>`;
+    }
+
+    async function loadTranscript(node) {
+      if (!node.open) return;
+      const target = node.querySelector('.transcript');
+      try {
+        const resp = await fetch(node.dataset.json, { headers: authHeaders() });
+        if (!resp.ok) throw new Error(`fetch failed: ${resp.status}`);
+        const meta = await resp.json();
+        target.innerHTML = meta.turns.map(t => {
+          const chTag = t.channel === 0 ? 'L' : 'R';
+          const spkShort = String(t.speaker).split('_').pop();
+          return `<div class="turn"><div class="t-tag ${chTag}"><b>${chTag} · ${escapeHtml(spkShort)}</b>${t.start.toFixed(2)}–${t.end.toFixed(2)}s</div><div>${escapeHtml(t.text || '')}</div></div>`;
+        }).join('');
+      } catch (err) {
+        target.textContent = `Could not load transcript: ${err}`;
+      }
+    }
+
+    ['search', 'channel', 'orientation', 'duration'].forEach(id => $(id).addEventListener(id === 'search' ? 'input' : 'change', applyFilters));
+    $('previous').addEventListener('click', () => { if (page) { page--; render(); scrollTo({ top: 330, behavior: 'smooth' }); } });
+    $('next').addEventListener('click', () => { if ((page + 1) * PAGE_SIZE < filtered.length) { page++; render(); scrollTo({ top: 330, behavior: 'smooth' }); } });
+    $('save-token').addEventListener('click', () => {
+      const v = $('hf-token').value.trim();
+      if (!v.startsWith('hf_')) { alert('Token must start with hf_'); return; }
+      localStorage.setItem('hf_token', v);
+      location.reload();
+    });
+    $('clear-token').addEventListener('click', () => {
+      localStorage.removeItem('hf_token');
+      $('hf-token').value = '';
+      location.reload();
+    });
+    load();
+  </script>
+</body>
+</html>
