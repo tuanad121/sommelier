@@ -63,8 +63,8 @@ def main() -> None:
                 "unique_speakers":  d["unique_speakers"],
                 "channels":         d["channels"],
                 "orientation":      "A" if d["conversation_id"].endswith("__oriA") else "B",
-                "wav_path":         f"fd/{jp.stem}.wav",
-                "json_path":        f"fd/{jp.name}",
+                "wav_path":         f"fd/{'oriA' if '__oriA' in jp.name else 'oriB'}/{jp.stem}.wav",
+                "json_path":        f"fd/{'oriA' if '__oriA' in jp.name else 'oriB'}/{jp.name}",
                 "preview":          _preview(d["turns"]),
             }
             f.write(json.dumps(row, ensure_ascii=False) + "\n")

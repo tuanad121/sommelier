@@ -10,14 +10,23 @@ Ships alongside the upstream per-turn tabular artifacts (`<clip>.jsonl` on
 
 ## File layout
 
-Each conversation is written twice, once per channel orientation:
+Each conversation is written twice, once per channel orientation. Orientations live in separate subdirectories because a single git tree cannot exceed 10000 files:
 
 ```
-<conversation_id>__oriA.wav      # 16 kHz, 2 channels, PCM_16
-<conversation_id>__oriA.json     # transcript + zero-origin timestamps
-<conversation_id>__oriB.wav      # same content, L/R swapped
-<conversation_id>__oriB.json     # channel fields swapped accordingly
+fd/
+├── README.md
+├── read_full_duplex.py                (canonical decoder)
+├── build_full_duplex_2channel.py      (reproducer)
+├── manifest.jsonl                     (slim index for the explorer)
+├── oriA/                              # 2559 conversations × 2 files
+│   ├── <conversation_id>__oriA.wav
+│   └── <conversation_id>__oriA.json
+└── oriB/                              # same, L/R swapped
+    ├── <conversation_id>__oriB.wav
+    └── <conversation_id>__oriB.json
 ```
+
+If you only need one orientation (e.g. matching the Sommelier paper's fixed-channel convention), `snapshot_download(..., allow_patterns=["fd/oriA/*"])` gives you a self-contained subset.
 
 The oriA/oriB pair covers the same underlying dialogue — B is the free
 augmentation for channel-invariance (see *Design decisions* below). Treat
