@@ -26,11 +26,22 @@ fd/
     └── <conversation_id>__oriB.json
 ```
 
-If you only need one orientation (e.g. matching the Sommelier paper's fixed-channel convention), `snapshot_download(..., allow_patterns=["fd/oriA/*"])` gives you a self-contained subset.
+If you only need one orientation (e.g. matching the Sommelier paper's fixed-channel convention, or pretraining where every hour is unique content), `snapshot_download(..., allow_patterns=["fd/oriA/*"])` gives you a self-contained subset.
 
 The oriA/oriB pair covers the same underlying dialogue — B is the free
 augmentation for channel-invariance (see *Design decisions* below). Treat
 them as independent training samples.
+
+## Hours accounting
+
+There are two "total hours" numbers depending on what you're counting:
+
+| Metric | Hours | Use for |
+| ------ | ----- | ------- |
+| **Unique dialogue** — 2559 conversations, each counted once | **~12 h** | Pretraining, self-supervised objectives, WER / naturalness eval — anywhere you care about **distinct content** |
+| **On-disk stereo audio** — oriA + oriB, each conversation twice with L/R swapped | **~24 h** | Full-duplex fine-tuning where the channel assignment matters and swapping L/R gives independent supervision signal |
+
+`__oriB` is not new dialogue — it's `__oriA` with the two channels swapped (so a channel-invariant model sees each conversation from both perspectives). Filter the manifest by `orientation == "A"` (or use `snapshot_download` with `allow_patterns=["fd/oriA/*"]`) to get the ~12 h unique subset.
 
 ## Audio contract
 
