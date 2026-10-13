@@ -222,36 +222,61 @@ data/raw/_final/-sepreformer-True-demucs-True-vad-True-diaModel-dia3-initPrompt-
 
 **ETA on 2×A100**: ~1 min wall per 4-min clip (~15 min per full-length episode). Idempotent — re-launching skips completed clips.
 
-### Step 5.5 — Sidecars (5 stages, chainable)
-Each of these adds a sidecar JSON next to `<clip>.json`. All idempotent (skip clips where their output already exists).
+### Step 5.5 — Sidecars (per-clip Python; chainable)
+Each sidecar reads `<clip>.json` and writes a sibling sidecar JSON. All idempotent — the scripts skip clips where their output already exists.
 
-```bash
-# 1. Sortformer per-frame speaker probs (fast, ~2 min for 100 clips)
-bash scripts/launch_sortformer_all.sh
+Each script takes `--run-dir <per-clip-dir>`. Write your own cluster launcher that `find`s the per-clip dirs and invokes each script in a loop (an example at the bottom of this subsection). The `launch_*.sh` orchestrators Tuan uses are cluster-local (SLURM `srun` wrappers) and not committed — adapt the loop below to your scheduler.
 
-# 2. BGM (PANNs) + speaker attribution (ECAPA) + speaker merge (sharded across 2 GPUs)
-bash scripts/launch_sidecars_new_clips.sh
-
-# 3. Force-alignment (wav2vec2-vi-250h word timing)
-bash scripts/launch_force_align_new.sh
-
-# 4. Gated MossFormer2 overlap separation (scans co-speech windows from Sortformer)
-bash scripts/launch_gated_mf2_new.sh
-```
-
-After each, verify:
 ```bash
 FINAL=data/raw/_final/-sepreformer-True-demucs-True-vad-True-diaModel-dia3-initPrompt-True-merge_gap-2.0-seg_th-0.15-cl_min-10-cl-th-0.5-LLM-case_2
-find $FINAL -name sortformer_probs.json | wc -l   # should match # of clip dirs
+
+# 1. Sortformer per-frame speaker probs (fast, GPU)
+python scripts/dump_sortformer_probs.py --run-dir "$FINAL/<clip>"
+
+# 2a. BGM detection via PANNs (GPU; adds bgm_check.json)
+python scripts/check_bgm.py --run-dir "$FINAL/<clip>"
+
+# 2b. Speaker attribution via ECAPA (GPU; adds attribution_check.json)
+python scripts/verify_speaker_attribution.py --run-dir "$FINAL/<clip>"
+
+# 2c. Speaker merge (confidence-merge over-split speakers; CPU)
+python scripts/merge_speakers.py --run-dir "$FINAL/<clip>"
+
+# 3. Force-alignment with wav2vec2-vi-250h (GPU; replaces WhisperX timings)
+python scripts/force_align_boundaries.py --run-dir "$FINAL/<clip>"
+```
+
+**Gated MossFormer2 overlap separation is currently parked** (see `memory/project_separator_park.md`) — don't run it.
+
+Simple shell loop template (adapt to your scheduler):
+
+```bash
+for CLIP_DIR in "$FINAL"/*/; do
+  python scripts/dump_sortformer_probs.py --run-dir "$CLIP_DIR"
+  python scripts/check_bgm.py --run-dir "$CLIP_DIR"
+  python scripts/verify_speaker_attribution.py --run-dir "$CLIP_DIR"
+  python scripts/merge_speakers.py --run-dir "$CLIP_DIR"
+  python scripts/force_align_boundaries.py --run-dir "$CLIP_DIR"
+done
+```
+
+Verify after each stage:
+```bash
+find "$FINAL" -name sortformer_probs.json | wc -l   # should match # of clip dirs
+find "$FINAL" -name bgm_check.json          | wc -l
+find "$FINAL" -name attribution_check.json  | wc -l
 ```
 
 ### Step 5.6 — Normalize (assemble JSONL + apply drop filters)
+Per-clip; writes `<clip>.jsonl` alongside `<clip>.json`.
+
 ```bash
-bash scripts/launch_normalize_all.sh
-# writes <clip>.jsonl next to each <clip>.json (one line per kept turn)
+for CLIP_JSON in "$FINAL"/*/*.json; do
+  python scripts/normalize_to_hf_jsonl.py --input "$CLIP_JSON"
+done
 ```
 
-Drop filters applied here: `phantom` (no Sortformer speaker), `misattributed` (ECAPA disagrees), `has_bgm` (PANNs music > threshold), `multi_speaker` (>2 concurrent). See `scripts/normalize_to_hf_jsonl.py` for exact thresholds.
+Drop filters applied here: `phantom` (no Sortformer speaker), `misattributed` (ECAPA disagrees), `has_bgm` (PANNs music > threshold), `multi_speaker` (>2 concurrent). See `scripts/normalize_to_hf_jsonl.py` for exact thresholds and the full `--source-url` / `--source-channel` / `--source-genre` metadata flags.
 
 ### Step 5.7 — Push to HuggingFace
 
