@@ -1573,20 +1573,24 @@ def asr_MoE(vad_segments, audio, segment_demucs_flags=None, enable_word_timestam
     def run_whisper_task(segment_audio_16k, dummy_vad):
         w_start = time.time()
         try:
+            # Pin language to the pipeline arg so per-segment detect_language
+            # can't flip to en on noisy / sub-second VN backchannels and rebuild
+            # the tokenizer away from --lang vi.
             transcribe_result = asr_model.transcribe(
-                segment_audio_16k, 
-                dummy_vad, 
-                batch_size=1, 
-                print_progress=False
+                segment_audio_16k,
+                dummy_vad,
+                batch_size=1,
+                print_progress=False,
+                language=lang,
             )
-            
+
             text_whisper = ""
-            detected_language = "en"
+            detected_language = lang
             words = []
 
             if transcribe_result and "segments" in transcribe_result and len(transcribe_result["segments"]) > 0:
                 text_whisper = " ".join([s["text"] for s in transcribe_result["segments"]]).strip()
-                detected_language = transcribe_result.get("language", "en")
+                detected_language = transcribe_result.get("language", lang)
                 if enable_word_timestamps:
                     for s in transcribe_result["segments"]:
                         if "words" in s: words.extend(s["words"])
@@ -1600,7 +1604,7 @@ def asr_MoE(vad_segments, audio, segment_demucs_flags=None, enable_word_timestam
             }
         except Exception as e:
             logger.error(f"Whisper failed: {e}")
-            return {"text": "", "language": "en", "words": [], "time": 0.0}
+            return {"text": "", "language": lang, "words": [], "time": 0.0}
 
     def run_parakeet_task(segment_audio_16k):
         try:
