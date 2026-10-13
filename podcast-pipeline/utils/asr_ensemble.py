@@ -11,6 +11,7 @@ Includes ROVER ensemble, repetition filtering, and multi-model ASR processing.
 import collections
 import time
 import tempfile
+import unicodedata
 import concurrent.futures
 from typing import List, Tuple, Dict, Any
 from itertools import zip_longest
@@ -128,8 +129,12 @@ class RoverEnsembler:
         if not transcripts:
             return ""
 
-        # Remove empty strings
-        transcripts = [t.strip() for t in transcripts if t and t.strip()]
+        # Normalize to NFC + strip. Vietnamese tone-marked characters round-trip
+        # through different ASR models in different Unicode forms (PhoWhisper
+        # tends to NFC, ChunkFormer-CTC often NFD); without a common form the
+        # same visible word fails string equality and ROVER degrades to
+        # Whisper-only.
+        transcripts = [unicodedata.normalize("NFC", t).strip() for t in transcripts if t and t.strip()]
         if not transcripts:
             return ""
 
