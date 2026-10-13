@@ -90,9 +90,22 @@ def pull_one(
         # Rate-limit awareness: signed URLs expire fast under heavy concurrent
         # load from a single IP.  These slow us down slightly but massively
         # reduce 403 attrition.
-        "--sleep-requests", "1",
+        "--sleep-requests", "2",
         "--retries", "5",
         "--fragment-retries", "5",
+        # Use Android + web player clients to bypass 403 bot-detection on
+        # compute cluster IPs. The cluster's egress IP is often flagged by
+        # YouTube's signed-URL freshness checks; android_vr is unsigned and
+        # mweb is a lighter fallback. Tested against batch-3 403 failures.
+        # Pass browser cookies so YouTube doesn't require sign-in from the
+        # cluster IP. File is generated locally via:
+        #   yt-dlp --cookies-from-browser chrome --cookies yt_cookies.txt --skip-download <any_url>
+        # then rsynced to the cluster. Refresh if you hit 403 again after ~7 days.
+        *(["--cookies", str(Path(__file__).parent.parent / "data" / "yt_cookies.txt")]
+          if (Path(__file__).parent.parent / "data" / "yt_cookies.txt").exists() else []),
+        # Fetch the EJS challenge solver lib from GitHub on first use (~once per
+        # machine). Required since yt-dlp 2026.07 to solve YouTube's n-challenge.
+        "--remote-components", "ejs:github",
         # YouTube's obfuscated player needs a JS runtime; without one, formats
         # get dropped and pages fail with "No title found in player responses".
         # deno is auto-detected only if on PATH; explicit path is safer.
