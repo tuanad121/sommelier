@@ -5,13 +5,13 @@
 **Repo**: https://github.com/tuanad121/sommelier (branch: `main`)
 **HF dataset**: https://huggingface.co/datasets/tuanamz/vi-sommelier-v0 (private — request access from Tuan)
 
-Not a design doc — for the "why" see `doc/full_duplex_data_scaling.md`. This is the "how to run it".
+This is the "how to run it".
 
 ## 1. What this pipeline does
 
-Takes a TSV of Vietnamese podcast YouTube URLs → produces per-clip diarized ASR JSON + per-turn audio + a stack of quality sidecars (music detection, force-alignment, speaker attribution, overlap separation). Output lands as one directory per source clip in a HuggingFace private dataset (the canonical one is Tuan's `tuanamz/vi-sommelier-v0`; you'll create and push to your own — see §2). Downstream extractors turn that into training-ready conversations (half-duplex JSONL or full-duplex 2-channel stereo).
+Takes a TSV of Vietnamese podcast YouTube URLs → produces per-clip diarized ASR JSON + per-turn audio + a stack of quality sidecars (music detection, force-alignment, speaker attribution, overlap separation). Output lands as one directory per source clip in a HuggingFace private dataset (the canonical one is Tuan's `tuanamz/vi-sommelier-v0`; you'll create and push to your own — see §2). A downstream extractor turns that into training-ready **half-duplex SFT conversation JSONs** (one JSON per contiguous dyadic run, with mono per-turn audio referenced from the per-clip output).
 
-Current state: 650 source clips on HF (~28 h raw, ~8 h clean dyadic 6-turn conversations, ~5 h stereo full-duplex). Target: extend to 15-20 h stereo FD via batches 4+.
+Current state: 650 source clips on HF (~28 h raw, ~8 h clean dyadic 6-turn conversations). Target: extend the clean-dyadic-SFT pool with batches 4+.
 
 ## 2. Prerequisites
 
@@ -83,7 +83,7 @@ Columns:
 1. **`label`** — must be unique across the whole TSV. Convention: `<channel_prefix>_<slug>_<episode_or_x>`. Filesystem-safe (letters/digits/underscore only). Used as directory/file basename throughout the pipeline.
 2. **`url`** — YouTube watch URL. Must include `v=<11-char-id>`.
 3. **`start`** — seconds. `0` = beginning.
-4. **`end`** — seconds. If `end <= start`, pulls the **whole episode** (added 2026-08-12 for FD scaling — see full_duplex_data_scaling.md).
+4. **`end`** — seconds. If `end <= start`, pulls the **whole episode** — gives more contiguous conversation runs that survive the normalize filters.
 5. **`channel`** — human-readable channel/episode label (goes into meta.json, useful for downstream filtering by source).
 6. **`genre`** — free-text tag. Common values: `podcast_interview`, `travel_vlog`, `talkshow`, `lifestyle_podcast`.
 
@@ -96,11 +96,11 @@ Columns:
 ### Step 5.0 — What we look for in a source clip
 
 **Target profile** (in priority order):
-1. **Dyadic** — exactly 2 speakers. Non-negotiable for full-duplex stereo (L=speaker A, R=speaker B; a 3rd speaker breaks the design). See `doc/full_duplex_data_scaling.md`.
+1. **Dyadic** — exactly 2 speakers. 3+ speakers get dropped as `multi_speaker` at normalize time, so multi-host content is wasted pipeline cost.
 2. **Long-form** — episode length ≥ 15 min, ideally 30-60 min. Longer episodes give more contiguous runs that survive our gap/dyadic filters (see `build_training_conversations.py` yield stats).
 3. **Native Vietnamese** — Bắc/Trung/Nam regional variety all fine. Minimal code-switching with English (keeps ASR confidence high).
 4. **Clean audio** — studio or headset recording, minimal reverb, minimal background music. Demucs removes music but leaves artifacts on heavy BGM.
-5. **Natural conversation** — real turn-taking, backchannels, interruptions. Scripted / read-aloud content teaches the model the wrong turn-taking dynamics for a full-duplex model.
+5. **Natural conversation** — real turn-taking, backchannels, interruptions. Scripted / read-aloud content teaches the model the wrong turn-taking dynamics.
 
 **Avoid**:
 - Multi-host / panel shows (>2 speakers active) — most content will be dropped as `multi_speaker` at normalize time.
@@ -130,7 +130,7 @@ Columns:
 | Bơ Đi Mà Sống (Vietcetera) | Handle seems broken (only 1 video enumerated). Worth re-checking. |
 | Tâm Sự Bí Mật | 58 videos, lifestyle/emotion podcast. Un-vetted yield. |
 
-**Avoid for full-duplex**:
+**Avoid**:
 
 | Channel | Why |
 |---|---|
@@ -146,7 +146,7 @@ Columns:
 - Have A Chat GPT — Vietcetera podcast, dyadic
 - The Quốc Khánh Show — celebrity interview
 
-**Guideline**: before adding a channel, pull 1 test episode → run through pipeline → check the resulting `training_conversations_fullduplex/stats.json` for clean-hour yield. Below ~10% clean-hours-per-raw-hour, drop the channel.
+**Guideline**: before adding a channel, pull 1 test episode → run through pipeline → check the resulting `training_conversations_sft/summary.tsv` for clean-hour yield. Below ~10% clean-hours-per-raw-hour, drop the channel.
 
 ### Step 5.1 — Find candidate episodes
 Enumerate a YouTube channel:
@@ -286,7 +286,7 @@ git add data/processed_urls.tsv && git commit -m "update processed_urls after ba
 
 ## 6. Building training data from what's already on HF
 
-Two extractors, independent of the pull/pipeline chain:
+One extractor, independent of the pull/pipeline chain.
 
 ### Half-duplex SFT conversations (for Qwen-style LoRA)
 ```bash
@@ -297,40 +297,7 @@ python scripts/build_training_conversations.py \
   --exclude-bgm --only-two-speaker \
   --preview-html data/training_conversations_sft/preview.html
 ```
-Emits one JSON per conversation + `summary.tsv` + `preview.html`. Yields ~8 h from current 650 clips.
-
-### Full-duplex 2-channel stereo (for Moshi-style adaptation)
-```bash
-# Step 1: get FD-loose conversation manifests
-python scripts/build_training_conversations.py \
-  --root $FINAL \
-  --out data/training_conversations_fullduplex \
-  --min-turns 6 --max-gap-s 1.0 --min-duration-s 30 \
-  --max-turn-duration-s 10.0 \
-  --exclude-bgm --only-two-speaker
-
-# Step 2: assemble stereo (both channel orientations)
-python scripts/build_full_duplex_2channel.py \
-  --convs-dir data/training_conversations_fullduplex/conversations \
-  --clips-root $FINAL \
-  --out data/full_duplex_stereo
-# writes <conversation_id>__oriA.wav / .json  (natural: first-turn speaker on L)
-#    and <conversation_id>__oriB.wav / .json  (channels swapped — free 2× aug)
-# All timestamps in the JSON are stereo-WAV-relative (zero-origin);
-# _original_clip_offset_s preserves the parent-clip offset for provenance.
-```
-
-**Do NOT use** `min-dur 60s + max-gap 0.5s + min-turns anything` (the "STRICT" profile) — yield is <1 %, not worth it. See `doc/full_duplex_data_scaling.md`.
-
-**Publishing the FD stereo to HuggingFace.** When you push the FD stereo output to your HF dataset, include the two scripts and the format README alongside the WAV/JSON pairs so consumers can decode without reverse-engineering. Concretely, copy these into your HF staging dir before `hf upload`:
-
-```bash
-cp scripts/build_full_duplex_2channel.py   hf_stage_fd/
-cp scripts/read_full_duplex.py             hf_stage_fd/
-cp doc/README_fullduplex.md                hf_stage_fd/README.md
-```
-
-`read_full_duplex.py` is the canonical decoder (`python read_full_duplex.py <conv>.json` prints the transcript aligned to stereo time; `--extract-turn N --out mono.wav` slices one turn from the right channel). `README.md` documents the format contract, schema, filter profile, and design rationale (why zero-origin, why both orientations).
+Emits one JSON per conversation + `summary.tsv` + `preview.html`. Yields ~8 h from current 650 clips. Each conversation JSON lists turns (`speaker`, `text`, `start_s`, `end_s`) and references the mono per-turn mp3s under the parent clip dir.
 
 ## 7. Storage discipline (important on shared cluster fs)
 
@@ -369,7 +336,7 @@ The shared filesystem on Vinbdi runs at 100% usage — leave headroom.
 |---|---|
 | "Why is turn X dropped?" | `<clip>.json` (raw pipeline output) + sidecars (`bgm_check.json`, `attribution_check.json`, etc.) — normalize logs which filter dropped it |
 | "Was this URL already processed?" | `data/processed_urls.tsv` |
-| "What filters were applied to build the SFT/FD dataset?" | `doc/full_duplex_data_scaling.md` |
+| "What filters were applied to build the SFT dataset?" | `scripts/normalize_to_hf_jsonl.py` (drop thresholds) + `scripts/build_training_conversations.py` (contiguity rules) |
 | "Why is Moshi-VN CPT risky?" | `memory/project_backbone_choice_vn.md` |
 | "What happened during LoRA training experiments?" | `memory/project_lora_collapse_full_sweep.md` + `doc/lora_training_qwen_omni.md` |
 | "How does the Qwen-Omni architecture work / why can't we LoRA the Talker?" | `doc/qwen_omni_architecture.md` + `memory/project_qwen_codec_encoder_blocked.md` |
