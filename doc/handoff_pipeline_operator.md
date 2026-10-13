@@ -230,8 +230,11 @@ Each script takes `--run-dir <per-clip-dir>`. Write your own cluster launcher th
 ```bash
 FINAL=data/raw/_final/-sepreformer-True-demucs-True-vad-True-diaModel-dia3-initPrompt-True-merge_gap-2.0-seg_th-0.15-cl_min-10-cl-th-0.5-LLM-case_2
 
-# 1. Sortformer per-frame speaker probs (fast, GPU)
-python scripts/dump_sortformer_probs.py --run-dir "$FINAL/<clip>"
+# 1. Sortformer per-frame speaker probs (GPU, batched over all clips).
+#    HEADS UP: this script has hardcoded RAW_DIR / OUT_DIR at the top
+#    (scripts/dump_sortformer_probs.py:26-27). Edit those two lines
+#    for your cluster before the first run.
+python scripts/dump_sortformer_probs.py
 
 # 2a. BGM detection via PANNs (GPU; adds bgm_check.json)
 python scripts/check_bgm.py --run-dir "$FINAL/<clip>"
@@ -248,11 +251,10 @@ python scripts/force_align_boundaries.py --run-dir "$FINAL/<clip>"
 
 **Gated MossFormer2 overlap separation is currently parked** (see `memory/project_separator_park.md`) — don't run it.
 
-Simple shell loop template (adapt to your scheduler):
+Simple shell loop template for stages 2 and 3 (stage 1 batches internally — see note above):
 
 ```bash
 for CLIP_DIR in "$FINAL"/*/; do
-  python scripts/dump_sortformer_probs.py --run-dir "$CLIP_DIR"
   python scripts/check_bgm.py --run-dir "$CLIP_DIR"
   python scripts/verify_speaker_attribution.py --run-dir "$CLIP_DIR"
   python scripts/merge_speakers.py --run-dir "$CLIP_DIR"
