@@ -17,6 +17,42 @@ A Vietnamese fork of NAVER Cloud's [Sommelier](https://github.com/naver-ai/somme
 
 ---
 
+## Sub-models — side by side
+
+The only component that swaps on `--lang vi` is the **ASR MoE ensemble** (3 ASR models voted by ROVER). Everything else — VAD, diarization, speaker embedding, music handling, overlap separation, inline word alignment, optional captioning — is language-agnostic and the same model loads in both paths.
+
+| Stage | Upstream (`--lang en` / `--lang ko`) | Vietnamese (`--lang vi`) | Source |
+|---|---|---|---|
+| **ASR voter 1 — anchor** | `openai/whisper-large-v3` (via WhisperX / faster-whisper) | `openai/whisper-large-v3` + VN initprompt | `main_original_ASR_MoE.py:3120` |
+| **ASR voter 2** | `nvidia/parakeet-tdt-0.6b-v2` (NeMo) | `vinai/PhoWhisper-large` (HF `transformers` pipeline) | `main_original_ASR_MoE.py:3155, 3167` |
+| **ASR voter 3** | `nvidia/canary-qwen-2.5b` (NeMo SALM) | `khanhld/chunkformer-ctc-large-vie` (ChunkFormer CTC) | `main_original_ASR_MoE.py:3163, 3171` |
+| **Ensemble method** | ROVER (SequenceMatcher alignment + per-position majority) | ROVER (same code path) | `utils/asr_ensemble.py:RoverEnsembler` |
+| VAD | Silero VAD | Silero VAD | `models/silero_vad.py` |
+| Diarization (primary) | `nvidia/diar_sortformer_4spk-v1` (NeMo Sortformer, 4-spk) | `nvidia/diar_sortformer_4spk-v1` | `main_original_ASR_MoE.py:3202` |
+| Diarization (fallback via `--dia3`) | `pyannote/speaker-diarization-3.1` | `pyannote/speaker-diarization-3.1` | `main_original_ASR_MoE.py:3066` |
+| Speaker embedding (cross-chunk linking) | `pyannote/embedding` | `pyannote/embedding` | `main_original_ASR_MoE.py:3191, 3211` |
+| BGM detection | PANNs `AudioTagging` (CNN14 default) | PANNs `AudioTagging` | `main_original_ASR_MoE.py:66` |
+| Vocal separation (when BGM detected) | Demucs `htdemucs` (via `demucs.separate` CLI) | Demucs `htdemucs` | `main_original_ASR_MoE.py:690, 770` |
+| Overlap separation (when `--sepreformer`) | SepReformer-Base-WSJ0 (local checkpoint) | SepReformer-Base-WSJ0 | `main_original_ASR_MoE.py:1105–1117` |
+| Inline word-level alignment (when `--whisperx_word_timestamps`) | WhisperX `load_align_model(language_code="en"\|"ko")` → per-lang wav2vec2 | WhisperX `load_align_model(language_code="vi")` → `nguyenvulebinh/wav2vec2-base-vietnamese-250h` | `models/whisper_asr.py:245` |
+| Audio captioning (when `--qwen3omni`) | Qwen3-Omni via local HTTP server at `localhost:11500` | Same local HTTP server (model is multilingual) | `main_original_ASR_MoE.py:1808, 2721` |
+
+### VN-only sidecar models (post-pipeline, no upstream equivalent)
+
+Run after the main pipeline against the per-clip output. Each adds a sidecar JSON next to `<clip>.json`.
+
+| Sidecar | Model | Purpose |
+|---|---|---|
+| Force-align (word boundaries) | `nguyenvulebinh/wav2vec2-base-vietnamese-250h` via `torchaudio.functional.forced_align` | Replaces WhisperX word-timestamp drift with phoneme-level alignment. See `scripts/force_align_boundaries.py:37`. |
+| Speaker attribution verifier | `speechbrain/spkrec-ecapa-voxceleb` (ECAPA-TDNN) | Rejects turns where the ECAPA embedding disagrees with the diarization-assigned speaker. See `scripts/verify_speaker_attribution.py:53`. |
+| Speaker merge | `speechbrain/spkrec-ecapa-voxceleb` | Merges over-split speakers across chunks. See `scripts/merge_speakers.py:42`. |
+| Gated MossFormer2 (overlap) | ClearVoice `MossFormer2_SS_16K` (external venv — see handoff doc §2) | Separates co-speech windows flagged by Sortformer. See `scripts/launch_gated_mf2_new.sh`. |
+| Sortformer frame probs | — (re-runs the already-loaded Sortformer to dump per-frame probs) | Enables downstream overlap classification. See `scripts/dump_sortformer_probs.py`. |
+
+> **Known gotcha**: ECAPA, TitaNet, and WavLM all **fail to distinguish similar male Vietnamese voices** (same regional dialect, similar pitch). The attribution threshold is raised to 0.85 with a manual override path — see `scripts/verify_speaker_attribution.py` for the heuristic. No public VN-trained speaker-verification model exists at the time of writing.
+
+---
+
 ## Pipeline shape
 
 ```
